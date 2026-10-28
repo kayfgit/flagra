@@ -1,0 +1,85 @@
+# Builds the minimal ffmpeg.exe flagra bundles (ffmpeg/build.sh), checks it on
+# Windows, and publishes it with its exact sources as a release named
+# ffmpeg-<version>-<build>. That release is never marked latest, so the app's
+# releases/latest/download links keep pointing at flagra itself.
+name: ffmpeg
+
+on:
+  # Builds and checks on any branch; only main publishes.
+  push:
+    paths: ['ffmpeg/build.sh', 'ffmpeg/version.env', '.github/workflows/ffmpeg.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install the Windows cross-compiler
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends mingw-w64 nasm pkg-config make
+
+      - name: Build
+        run: bash ffmpeg/build.sh
+        env:
+          OUT: out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg
+          path: out/
+
+  check:
+    needs: build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: ffmpeg
+          path: out
+
+      # CI machines have no desktop to capture, so this checks everything else:
+      # the components flagra needs are in, and audio -> AAC -> MPEG-TS -> MP4 works.
+      - name: Smoke test
+        shell: pwsh
+        run: |
+          $ff = Resolve-Path out/ffmpeg.exe
+          $lists = (& $ff -hide_banner -filters) + (& $ff -hide_banner -encoders) + (& $ff -hide_banner -muxers) | Out-String
+          foreach ($need in 'ddagrab', 'scale_d3d11', 'hwdownload', 'libx264', ' aac ', ' mp4 ', ' mpegts ') {
+            if ($lists -notmatch [regex]::Escape($need)) { throw "missing $need" }
+          }
+          $pcm = [byte[]]::new(48000 * 8 * 2)  # 2 s of f32 stereo silence
+          [IO.File]::WriteAllBytes("$PWD/a.raw", $pcm)
+          & $ff -hide_banner -loglevel error -f f32le -ar 48000 -ac 2 -i a.raw -c:a aac -b:a 160k -f mpegts a.ts
+          if ($LASTEXITCODE) { throw 'encoding to MPEG-TS failed' }
+          & $ff -hide_banner -loglevel error -f mpegts -i a.ts -c copy -movflags +faststart a.mp4
+          if ($LASTEXITCODE -or (Get-Item a.mp4).Length -lt 1000) { throw 'remuxing to MP4 failed' }
+          "ffmpeg.exe is $([math]::Round((Get-Item $ff).Length / 1MB, 1)) MB and works"
+
+  publish:
+    needs: check
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: ffmpeg
+          path: out
+
+      - name: Publish (once per version/build)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          source ffmpeg/version.env
+          tag="ffmpeg-$FFMPEG_VERSION-$BUILD"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "$tag is already published; bump BUILD in ffmpeg/version.env to publish a new one"
+            exit 0
+          fi
+          gh release create "$tag" out/* --latest=false --title "$tag (bundled with flagra)" --notes \
+            "The ffmpeg.exe bundled with flagra: ffmpeg $FFMPEG_VERSION with x264 ($X264_REF), built by build.sh with only what flagra uses. Licensed GPL v2 or later (COPYING.GPLv2); the exact sources are attached."
