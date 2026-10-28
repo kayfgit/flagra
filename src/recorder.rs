@@ -41,7 +41,7 @@ struct Shared {
     restart: AtomicBool,
     /// PID of the running ffmpeg, 0 while capture is down.
     pid: AtomicU32,
-    /// Job object that kills ffmpeg if PowerClip dies, so it never lingers.
+    /// Job object that kills ffmpeg if flagra dies, so it never lingers.
     job: isize,
 }
 
@@ -99,23 +99,23 @@ impl Recorder {
             let ring = self.shared.ring.lock().unwrap();
             (ring.snapshot(want), ring.buffered())
         };
-        let data = data.ok_or("nothing recorded yet - is capture running? (see powerclip.log)")?;
+        let data = data.ok_or("nothing recorded yet - is capture running? (see flagra.log)")?;
         let secs = buffered.min(want).as_secs_f64();
 
         let dir = output_dir(&cfg);
         fs::create_dir_all(&dir).map_err(|e| format!("cannot create {}: {}", dir.display(), e))?;
         let stamp = file_stamp();
-        let mut out = dir.join(format!("PowerClip_{}.mp4", stamp));
+        let mut out = dir.join(format!("flagra_{}.mp4", stamp));
         let mut n = 2;
         while out.exists() {
-            out = dir.join(format!("PowerClip_{}_{}.mp4", stamp, n));
+            out = dir.join(format!("flagra_{}_{}.mp4", stamp, n));
             n += 1;
         }
 
         let ff = resolve_ffmpeg(&cfg, &self.shared.dir)?;
         // The buffer is read twice (video, and audio with its recording shift
         // undone), so it goes through a temp file rather than a pipe.
-        let tmp = std::env::temp_dir().join(format!("powerclip_{}.ts", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!("flagra_{}.ts", std::process::id()));
         fs::write(&tmp, &data).map_err(|e| format!("cannot write {}: {}", tmp.display(), e))?;
         drop(data);
         // Pure remux (no re-encode): costs almost nothing.
@@ -142,7 +142,7 @@ impl Recorder {
 }
 
 pub fn output_dir(cfg: &Config) -> PathBuf {
-    cfg.output_dir.clone().unwrap_or_else(|| crate::videos_dir().join("PowerClip"))
+    cfg.output_dir.clone().unwrap_or_else(|| crate::videos_dir().join("flagra"))
 }
 
 fn supervise(s: &Shared) {
@@ -318,14 +318,15 @@ pub fn resolve_ffmpeg(cfg: &Config, app_dir: &Path) -> Result<PathBuf, String> {
     let found = if let Some(p) = &cfg.ffmpeg_path {
         p.exists().then(|| p.clone()).ok_or_else(|| format!("ffmpeg_path {} does not exist", p.display()))?
     } else {
-        let local = app_dir.join("ffmpeg.exe");
-        if local.exists() {
-            local
-        } else {
-            std::env::var_os("PATH")
-                .and_then(|path| std::env::split_paths(&path).map(|d| d.join("ffmpeg.exe")).find(|p| p.exists()))
-                .ok_or("ffmpeg.exe not found: put it next to powerclip.exe, on PATH, or set ffmpeg_path")?
-        }
+        // Next to flagra.exe, then the ffmpeg\ folder the installer fills, then PATH.
+        [app_dir.join("ffmpeg.exe"), app_dir.join("ffmpeg").join("ffmpeg.exe")]
+            .into_iter()
+            .find(|p| p.exists())
+            .or_else(|| {
+                std::env::var_os("PATH")
+                    .and_then(|path| std::env::split_paths(&path).map(|d| d.join("ffmpeg.exe")).find(|p| p.exists()))
+            })
+            .ok_or("ffmpeg.exe not found: run the installer again, put it next to flagra.exe, or set ffmpeg_path")?
     };
     Ok(unshim(found))
 }

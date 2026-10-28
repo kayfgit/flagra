@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Permissions for the PowerClip window",
+  "description": "Permissions for the flagra window",
   "windows": ["main"],
   "permissions": ["core:default"]
 }

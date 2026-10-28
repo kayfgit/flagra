@@ -37,9 +37,9 @@ pub struct Config {
     pub monitor: u32,
     pub draw_mouse: bool,
     pub priority: Priority,
-    /// None = <Videos>\PowerClip.
+    /// None = <Videos>\flagra.
     pub output_dir: Option<PathBuf>,
-    /// None = ffmpeg.exe next to powerclip.exe, then PATH.
+    /// None = ffmpeg.exe next to flagra.exe, then PATH.
     pub ffmpeg_path: Option<PathBuf>,
     pub beep: bool,
     pub notify: bool,
@@ -72,8 +72,8 @@ const PRESETS: &[&str] = &[
 ];
 
 /// Written on first run. Keep the values in sync with `Config::default`.
-pub const TEMPLATE: &str = r#"# PowerClip settings.
-# After editing: right-click the tray icon -> "Reload settings" (or restart PowerClip).
+pub const TEMPLATE: &str = r#"# flagra settings.
+# After editing: right-click the tray icon -> "Reload settings" (or restart flagra).
 
 # Key combo that saves a clip. Modifiers: Ctrl, Alt, Shift, Win.
 # Keys: A-Z, 0-9, F1-F24, Home, End, Insert, Delete, PageUp, PageDown,
@@ -109,10 +109,10 @@ draw_mouse = true
 # below_normal lets games win when the CPU is busy (the clip may stutter instead of your game).
 priority = below_normal
 
-# Where clips go. Empty = your Videos folder\PowerClip.
+# Where clips go. Empty = your Videos folder\flagra.
 output_dir =
 
-# Path to ffmpeg.exe. Empty = ffmpeg.exe next to powerclip.exe, otherwise the one on PATH.
+# Path to ffmpeg.exe. Empty = ffmpeg.exe next to flagra.exe, otherwise the one on PATH.
 ffmpeg_path =
 
 # Beep when a clip is saved (works in fullscreen games), and show a notification.

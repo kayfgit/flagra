@@ -1,19 +1,32 @@
-# PowerClip
+# flagra
 
 ShadowPlay-style instant replay for PCs that can't run ShadowPlay (no NVENC: GT 1030, GT 710, iGPU-less CPUs, ...).
 Press a hotkey, get the last N seconds as an `.mp4`.
 
-- Lives in the tray; default hotkey **Alt+F10**, saves the last **20 s** to `Videos\PowerClip`.
+- Lives in the tray; default hotkey **Alt+F10**, saves the last **20 s** to `Videos\flagra`.
 - Records the screen and desktop audio, kept in sync (measured within ±10 ms).
 - The replay buffer lives in **RAM** (~25 MB at the default settings), so it doesn't write to disk constantly.
   The disk is only touched when you save a clip.
 - Saving a clip takes no extra CPU: the buffer is already encoded, so it's just copied into an `.mp4`.
 
-## Requirements
+## Install
 
-- Windows 10/11
-- `ffmpeg.exe` 6.1 or newer (needs `ddagrab`). Put it next to `powerclip.exe`, have it on `PATH`
-  (e.g. `scoop install ffmpeg`), or set `ffmpeg_path` in the settings.
+Paste this into PowerShell. It installs flagra for your user (no admin rights, no clicks), sets up
+ffmpeg if you don't already have one, and starts it:
+
+```powershell
+irm https://raw.githubusercontent.com/kayfgit/flagra/main/install.ps1 | iex
+```
+
+Then press **Alt+F10** whenever something worth keeping happens. Run the same command again to update;
+your settings are kept.
+
+You can also download [flagra-setup.exe](https://github.com/kayfgit/flagra/releases/latest/download/flagra-setup.exe),
+or [flagra-portable.exe](https://github.com/kayfgit/flagra/releases/latest/download/flagra-portable.exe) to run it
+without installing. Those two need an `ffmpeg.exe` 6.1+ (with `ddagrab`) next to the exe or on your `PATH`
+(e.g. `scoop install ffmpeg`); the one-liner takes care of that. flagra needs Windows 10 or 11.
+
+To uninstall, use **Settings › Apps**. Your clips in `Videos\flagra` are never touched.
 
 ## Build
 
@@ -21,22 +34,23 @@ Press a hotkey, get the last N seconds as an `.mp4`.
 cargo build --release
 ```
 
-The exe ends up at `target\release\powerclip.exe` (~3.2 MB, the GUI is embedded). Copy it anywhere.
-On first run it writes `powerclip.ini` next to itself. The GUI uses WebView2, which ships with Windows 11
-(and almost every Windows 10).
+The exe ends up at `target\release\flagra.exe` (~3.2 MB, the GUI is embedded). Copy it anywhere.
+On first run it writes `flagra.ini` next to itself. The GUI uses WebView2, which ships with Windows 11
+(and almost every Windows 10). `npx @tauri-apps/cli@2 build` also builds the installer; pushing a
+`v*` tag makes GitHub Actions build both and publish a release.
 
 ## Use
 
 | | |
 |---|---|
 | Save a clip | hotkey (default `Alt+F10`), `c` in the window, or tray → *Save clip now* |
-| Open the window | double-click the tray icon, or start `powerclip.exe` again while it's running |
+| Open the window | double-click the tray icon, or start `flagra.exe` again while it's running |
 | Something wrong? | `:log` in the window, or tray → *Open log* (ffmpeg's own errors go to `ffmpeg.log`) |
 
 ## The window
 
 The recorder runs headless in the tray (~30 MB). The window is a **separate process**
-(`powerclip.exe --ui`) that only exists while it's open: closing it (Esc) ends the process and its
+(`flagra.exe --ui`) that only exists while it's open: closing it (Esc) ends the process and its
 WebView2, and recording carries on untouched. Open, it costs about 90 MB (WebView2 trimmed the same
 way as tradu, GPU off: that measured 50 MB lighter and no more CPU, even while playing clips).
 
@@ -69,17 +83,17 @@ folder, beep, notification) apply instantly without losing what's buffered.
 You can also control it from the command line, e.g. to bind a mouse button or macro key:
 
 ```bash
-powerclip.exe --clip
+flagra.exe --clip
 ```
 
-`powerclip.exe --quit` stops the running instance.
+`flagra.exe --quit` stops the running instance.
 
-To start it with Windows, put a shortcut to `powerclip.exe` in the `shell:startup` folder.
+To start it with Windows, put a shortcut to `flagra.exe` in the `shell:startup` folder.
 
-## Settings (`powerclip.ini`)
+## Settings (`flagra.ini`)
 
 The window edits this file for you (keeping its comments). Editing it by hand works too: tray →
-*Edit powerclip.ini*, then tray → *Reload settings*.
+*Edit flagra.ini*, then tray → *Reload settings*.
 
 | Setting | Default | Notes |
 |---|---|---|
@@ -94,7 +108,7 @@ The window edits this file for you (keeping its comments). Editing it by hand wo
 | `monitor` | `0` | Which display to record. |
 | `draw_mouse` | `true` | |
 | `priority` | `below_normal` | Encoder CPU priority. `below_normal` = when the CPU is maxed, the clip stutters instead of your game. |
-| `output_dir` | *(Videos\PowerClip)* | |
+| `output_dir` | *(Videos\flagra)* | |
 | `ffmpeg_path` | *(auto)* | |
 | `beep` / `notify` | `true` | Beep (audible in fullscreen games) and a tray notification on save. |
 
@@ -106,7 +120,7 @@ Measured on an i5-9400F (6 cores) + GT 1030, 1080p60, defaults:
 |---|---|---|
 | ffmpeg, idle desktop | ~10% | ~115 MB (about 70 MB of it is the GPU capture itself) |
 | ffmpeg, full-screen fast motion | ~15% | ~115 MB |
-| powerclip.exe (recorder) | ~0.1% | ~30 MB (includes the replay buffer) |
+| flagra.exe (recorder) | ~0.1% | ~30 MB (includes the replay buffer) |
 | the window, only while open | ~0% idle | ~90 MB (≈165 MB while playing a clip) |
 
 If that's too much while gaming, try these in order: `fps = 30`, then `resolution = 1280x720`.
@@ -116,7 +130,7 @@ If that's too much while gaming, try these in order: `fps = 30`, then `resolutio
 ```
 GPU:  Desktop Duplication (ddagrab) → pick freshest frame per slot → scale + RGB→NV12
 CPU:  x264 ultrafast ─┐
-WASAPI loopback ─AAC─┴→ MPEG-TS → powerclip.exe RAM ring (split at keyframes, 1/s)
+WASAPI loopback ─AAC─┴→ MPEG-TS → flagra.exe RAM ring (split at keyframes, 1/s)
 hotkey → copy the last N s of the ring → remux to .mp4 (no re-encode)
 ```
 
@@ -124,9 +138,9 @@ hotkey → copy the last N s of the ring → remux to .mp4 (no re-encode)
   Everything else (capture, scaling, colour conversion) stays on the GPU, so the CPU only
   receives a ready-to-encode NV12 frame.
 - **Smooth capture on high-refresh monitors.** ddagrab paced at 60 fps waits only half a frame for new content,
-  so on a 120 Hz screen it often timed out and repeated a frame (~9% of frames measured). PowerClip polls at
+  so on a 120 Hz screen it often timed out and repeated a frame (~9% of frames measured). flagra polls at
   500 Hz and lets ffmpeg's `fps` filter pick the newest frame for each 1/60 s slot (0 repeats measured).
-- **Audio sync.** ffmpeg can't capture desktop audio itself, so powerclip.exe captures it with WASAPI loopback
+- **Audio sync.** ffmpeg can't capture desktop audio itself, so flagra.exe captures it with WASAPI loopback
   and pipes raw PCM in. Each audio packet is placed by its own hardware timestamp on a timeline that starts at
   a known instant, and silence is filled in when nothing is playing (loopback sends no data then). The video's
   first frame is pinned to the same instant through its wall-clock time.
@@ -135,7 +149,7 @@ hotkey → copy the last N s of the ring → remux to .mp4 (no re-encode)
   frames. So audio is stamped 0.15 s later while recording, and the shift is undone when a clip is saved.
   The side effect is that the last ~0.15 s of a clip has no audio.
 - If ffmpeg dies (crash, display mode change in a game), it's restarted automatically. It runs inside a
-  job object, so it never outlives PowerClip.
+  job object, so it never outlives flagra.
 
 ## Known limits
 

@@ -29,12 +29,12 @@ use config::Config;
 use recorder::Recorder;
 use util::{copy_wide, wide};
 
-pub const CLASS: PCWSTR = w!("PowerClipWnd");
+pub const CLASS: PCWSTR = w!("FlagraWnd");
 const WM_TRAY: u32 = WM_APP + 1;
 const WM_REMOTE_CLIP: u32 = WM_APP + 2;
 const WM_REMOTE_QUIT: u32 = WM_APP + 3;
 const WM_NOTE: u32 = WM_APP + 4;
-/// From the GUI: reload powerclip.ini. wParam 1 = no "settings reloaded" notification.
+/// From the GUI: reload flagra.ini. wParam 1 = no "settings reloaded" notification.
 pub const WM_REMOTE_RELOAD: u32 = WM_APP + 5;
 /// From the GUI: returns (buffered ms << 32) | ffmpeg pid.
 pub const WM_STATUS: u32 = WM_APP + 6;
@@ -71,7 +71,7 @@ fn hwnd() -> HWND {
 }
 
 fn main() {
-    // `powerclip --clip` / `--quit` control the running instance (bind to mouse
+    // `flagra --clip` / `--quit` control the running instance (bind to mouse
     // buttons, Stream Deck, AutoHotkey, ...).
     let arg = std::env::args().nth(1);
     if let Some(arg) = &arg {
@@ -102,22 +102,22 @@ fn main() {
         return;
     }
     unsafe {
-        let _mutex = CreateMutexW(None, false, w!("Local\\PowerClipSingleInstance"));
+        let _mutex = CreateMutexW(None, false, w!("Local\\FlagraSingleInstance"));
         if GetLastError() == ERROR_ALREADY_EXISTS {
-            // Launching PowerClip again (Start menu, desktop shortcut) opens the GUI.
+            // Launching flagra again (Start menu, desktop shortcut) opens the GUI.
             ui::run(dir);
             return;
         }
         std::mem::forget(_mutex);
     }
-    logging::init(&dir.join("powerclip.log"));
+    logging::init(&dir.join("flagra.log"));
 
-    let cfg_path = dir.join("powerclip.ini");
+    let cfg_path = dir.join("flagra.ini");
     let (cfg, warnings) = config::load(&cfg_path);
     for w in &warnings {
         log!("settings: {}", w);
     }
-    log!("PowerClip started: {:?}", cfg);
+    log!("flagra started: {:?}", cfg);
     let cfg = Arc::new(Mutex::new(cfg));
     let rec = Recorder::start(dir.clone(), cfg.clone());
 
@@ -142,7 +142,7 @@ fn main() {
         };
         RegisterClassW(&wc);
         let Ok(h) = CreateWindowExW(
-            WINDOW_EX_STYLE(0), CLASS, w!("PowerClip"), WS_OVERLAPPED,
+            WINDOW_EX_STYLE(0), CLASS, w!("flagra"), WS_OVERLAPPED,
             0, 0, 0, 0, None, None, Some(instance.into()), None,
         ) else {
             log!("cannot create window");
@@ -154,7 +154,7 @@ fn main() {
         add_tray_icon();
         register_hotkey();
         if !warnings.is_empty() {
-            notify("PowerClip settings", &format!("{} (see powerclip.log)", warnings[0]), true);
+            notify("flagra settings", &format!("{} (see flagra.log)", warnings[0]), true);
         }
 
         let mut msg = MSG::default();
@@ -167,7 +167,7 @@ fn main() {
         let _ = Shell_NotifyIconW(NIM_DELETE, &mut nid);
     }
     app().rec.shutdown();
-    log!("PowerClip stopped");
+    log!("flagra stopped");
 }
 
 unsafe extern "system" fn wndproc(h: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
@@ -200,7 +200,7 @@ unsafe extern "system" fn wndproc(h: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
             }
             ID_SETTINGS => open(&app().cfg_path),
             ID_RELOAD => reload(false),
-            ID_LOG => open(&app().dir.join("powerclip.log")),
+            ID_LOG => open(&app().dir.join("flagra.log")),
             ID_QUIT => PostQuitMessage(0),
             _ => {}
         },
@@ -244,7 +244,7 @@ fn save_clip() {
     });
 }
 
-/// Re-reads powerclip.ini. Capture only restarts (and the replay buffer only
+/// Re-reads flagra.ini. Capture only restarts (and the replay buffer only
 /// starts over) when an encoding/capture setting actually changed.
 fn reload(quiet: bool) {
     let a = app();
@@ -267,8 +267,8 @@ fn reload(quiet: bool) {
         let _ = Shell_NotifyIconW(NIM_MODIFY, &mut nid);
     }
     match warnings.first() {
-        Some(w) => notify("PowerClip settings", &format!("{} (see powerclip.log)", w), true),
-        None if !quiet => notify("PowerClip", "Settings reloaded", false),
+        Some(w) => notify("flagra settings", &format!("{} (see flagra.log)", w), true),
+        None if !quiet => notify("flagra", "Settings reloaded", false),
         None => {}
     }
 }
@@ -289,7 +289,7 @@ fn register_hotkey() {
         let Ok((mods, vk)) = hotkey::parse(&combo) else { return };
         if RegisterHotKey(Some(hwnd()), HOTKEY_ID, mods, vk).is_err() {
             log!("hotkey {} is already taken by another program", combo);
-            notify("PowerClip", &format!("Hotkey {} is used by another program. Pick another in settings.", combo), true);
+            notify("flagra", &format!("Hotkey {} is used by another program. Pick another in settings.", combo), true);
         } else {
             log!("hotkey {} registered", combo);
         }
@@ -297,7 +297,6 @@ fn register_hotkey() {
 }
 
 fn tray_data() -> NOTIFYICONDATAW {
-    let cfg = app().cfg.lock().unwrap();
     let mut nid = NOTIFYICONDATAW {
         cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
         hWnd: hwnd(),
@@ -307,7 +306,7 @@ fn tray_data() -> NOTIFYICONDATAW {
         hIcon: tray_icon(),
         ..Default::default()
     };
-    copy_wide(&mut nid.szTip, &format!("PowerClip - {} saves the last {}s", cfg.hotkey, cfg.clip_seconds));
+    copy_wide(&mut nid.szTip, "flagra");
     nid
 }
 
@@ -343,12 +342,12 @@ unsafe fn show_menu(h: HWND) {
     let Ok(menu) = CreatePopupMenu() else { return };
     let hk = app().cfg.lock().unwrap().hotkey.clone();
     let save = wide(&format!("Save clip now\t{}", hk));
-    let _ = AppendMenuW(menu, MF_STRING, ID_OPEN, w!("Open PowerClip"));
+    let _ = AppendMenuW(menu, MF_STRING, ID_OPEN, w!("Open flagra"));
     let _ = SetMenuDefaultItem(menu, ID_OPEN as u32, 0);
     let _ = AppendMenuW(menu, MF_STRING, ID_SAVE, PCWSTR(save.as_ptr()));
     let _ = AppendMenuW(menu, MF_STRING, ID_FOLDER, w!("Open clips folder"));
     let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
-    let _ = AppendMenuW(menu, MF_STRING, ID_SETTINGS, w!("Edit powerclip.ini"));
+    let _ = AppendMenuW(menu, MF_STRING, ID_SETTINGS, w!("Edit flagra.ini"));
     let _ = AppendMenuW(menu, MF_STRING, ID_RELOAD, w!("Reload settings"));
     let _ = AppendMenuW(menu, MF_STRING, ID_LOG, w!("Open log"));
     let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());

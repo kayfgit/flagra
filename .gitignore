@@ -3,7 +3,7 @@
 /gen
 
 # Created next to the exe at runtime
-powerclip.ini
+flagra.ini
 *.log
 
 # Local tooling and notes

@@ -39,7 +39,7 @@ function tauriApi() {
 function browserApi() {
   const now = Date.now();
   const fake = (n, ago, dur) => ({
-    name: `PowerClip_2026-10-27_${n}.mp4`, path: `C:\\clips\\PowerClip_${n}.mp4`,
+    name: `flagra_2026-10-27_${n}.mp4`, path: `C:\\clips\\flagra_${n}.mp4`,
     size: Math.round(dur * 1.27e6), modified: now - ago * 1000, duration: dur,
   });
   let clips = [fake('21-14-02', 40, 20.2), fake('20-56-28', 1100, 10.03), fake('20-41-20', 2500, 8.8),
@@ -47,7 +47,7 @@ function browserApi() {
   let config = {
     hotkey: 'Alt+F10', clip_seconds: 20, fps: 60, resolution: 'native', video_bitrate_kbps: 10000,
     preset: 'ultrafast', audio: true, audio_bitrate_kbps: 160, monitor: 0, draw_mouse: true,
-    priority: 'below_normal', output_dir: 'C:\\Users\\you\\Videos\\PowerClip', output_dir_custom: false,
+    priority: 'below_normal', output_dir: 'C:\\Users\\you\\Videos\\flagra', output_dir_custom: false,
     ffmpeg_path: null, beep: true, notify: true,
   };
   const capture = new Set(['fps', 'resolution', 'video_bitrate_kbps', 'preset', 'audio', 'audio_bitrate_kbps',
@@ -178,7 +178,7 @@ const SETTINGS = [
   { key: 'notify', label: 'notification', cmd: 'notify', bool: true, value: c => (c.notify ? 'on' : 'off') },
   {
     key: 'ffmpeg_path', label: 'ffmpeg', cmd: 'ffmpeg',
-    value: c => c.ffmpeg_path ?? ['auto', ' (next to powerclip.exe, then PATH)'],
+    value: c => c.ffmpeg_path ?? ['auto', ' (next to flagra.exe, then PATH)'],
   },
 ];
 
@@ -589,7 +589,7 @@ const COMMANDS = {
     return change('priority', p, `encoder priority ${priorityLabel(config.priority)} → ${priorityLabel(p)}`);
   })),
   dir: arg => (!arg ? { label: `folder for clips (now ${config.output_dir}) · :dir reset for the default` }
-    : /^(reset|default)$/i.test(arg) ? change('output_dir', '', 'clips go to Videos\\PowerClip')
+    : /^(reset|default)$/i.test(arg) ? change('output_dir', '', 'clips go to Videos\\flagra')
     : change('output_dir', arg, `clips go to ${arg}`)),
   ffmpeg: arg => (!arg ? { label: `path to ffmpeg.exe (now ${config.ffmpeg_path ?? 'auto'}) · :ffmpeg auto to search` }
     : /^auto$/i.test(arg) ? change('ffmpeg_path', '', 'find ffmpeg automatically')
@@ -613,12 +613,12 @@ const COMMANDS = {
   folder: () => ({ label: 'open the clips folder', run: () => api.open('folder').catch(err => say(errText(err), 'error')) }),
   log: arg => (/^ffmpeg$/i.test(arg ?? '')
     ? { label: 'open ffmpeg.log', run: () => api.open('ffmpeg_log').catch(err => say(errText(err), 'error')) }
-    : { label: 'open powerclip.log (:log ffmpeg for ffmpeg.log)', run: () => api.open('log').catch(err => say(errText(err), 'error')) }),
-  ini: () => ({ label: 'open powerclip.ini in your editor', run: () => api.open('ini').catch(err => say(errText(err), 'error')) }),
+    : { label: 'open flagra.log (:log ffmpeg for ffmpeg.log)', run: () => api.open('log').catch(err => say(errText(err), 'error')) }),
+  ini: () => ({ label: 'open flagra.ini in your editor', run: () => api.open('ini').catch(err => say(errText(err), 'error')) }),
   start: () => (lastStatus?.running ? { label: 'already recording' }
     : { label: 'start recording in the background', run: startRecorder }),
   stop: () => ({
-    label: 'quit the recorder: nothing is recorded until :start or you open PowerClip again',
+    label: 'quit the recorder: nothing is recorded until :start or you open flagra again',
     run: async () => { await api.stop(); say('recorder stopped'); setTimeout(refreshStatus, 500); },
   }),
   settings: () => ({ label: 'show settings', run: () => switchView('settings') }),
@@ -844,7 +844,7 @@ window.addEventListener('focus', () => refreshClips());
   try {
     const loaded = await api.load();
     config = loaded.config;
-    if (loaded.warnings?.length) say(`powerclip.ini: ${loaded.warnings[0]}`, 'error');
+    if (loaded.warnings?.length) say(`flagra.ini: ${loaded.warnings[0]}`, 'error');
   } catch (err) {
     say(errText(err), 'error');
   }

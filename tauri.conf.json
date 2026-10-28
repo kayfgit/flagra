@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "PowerClip",
-  "version": "0.2.0",
-  "identifier": "com.powerclip.app",
+  "productName": "flagra",
+  "version": "0.1.0",
+  "identifier": "com.flagra.clipper",
   "build": {
     "frontendDist": "ui"
   },
@@ -11,7 +11,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "PowerClip",
+        "title": "flagra",
         "width": 980,
         "height": 600,
         "minWidth": 720,
@@ -32,7 +32,17 @@
     }
   },
   "bundle": {
-    "active": false,
+    "active": true,
+    "targets": ["nsis"],
+    "category": "Video",
+    "shortDescription": "Instant replay for PCs without a hardware encoder",
+    "longDescription": "Press a hotkey to save the last seconds of your screen and desktop audio, ShadowPlay-style, on GPUs without NVENC. Light on CPU and RAM.",
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "installerHooks": "installer.nsh"
+      }
+    },
     "icon": ["icons/32x32.png", "icons/128x128.png", "icons/icon.png", "icons/icon.ico"]
   }
 }

@@ -1,6 +1,6 @@
-//! The GUI: a Tauri window running in its own process (`powerclip.exe --ui`).
+//! The GUI: a Tauri window running in its own process (`flagra.exe --ui`).
 //! It exists only while the window is open; closing it ends the process and
-//! WebView2 with it. It talks to the recorder through powerclip.ini, the clips
+//! WebView2 with it. It talks to the recorder through flagra.ini, the clips
 //! folder and window messages, never by sharing memory.
 
 use std::collections::HashMap;
@@ -60,9 +60,9 @@ struct UiState {
 }
 
 pub fn run(dir: PathBuf) {
-    let cfg_path = dir.join("powerclip.ini");
+    let cfg_path = dir.join("flagra.ini");
     tauri::Builder::default()
-        // Opening PowerClip while the window is already up just focuses it.
+        // Opening flagra while the window is already up just focuses it.
         .plugin(tauri_plugin_single_instance::init(|app, _, _| focus(app)))
         .manage(UiState {
             dir,
@@ -80,7 +80,7 @@ pub fn run(dir: PathBuf) {
             play, open_special, start_recorder, stop_recorder,
         ])
         .run(tauri::generate_context!())
-        .expect("error while running the PowerClip window");
+        .expect("error while running the flagra window");
 }
 
 fn focus(app: &AppHandle) {
@@ -208,7 +208,7 @@ unsafe fn process_stats(pid: u32) -> Option<(u64, Option<f64>)> {
 
 /// The recorder's most recent capture problem, from its log.
 fn last_capture_error(dir: &Path) -> Option<String> {
-    let mut f = File::open(dir.join("powerclip.log")).ok()?;
+    let mut f = File::open(dir.join("flagra.log")).ok()?;
     let len = f.metadata().ok()?.len();
     f.seek(SeekFrom::Start(len.saturating_sub(16 * 1024))).ok()?;
     let mut tail = String::new();
@@ -222,7 +222,7 @@ fn last_capture_error(dir: &Path) -> Option<String> {
         .map(|m| m.trim_start_matches("capture: ").to_string())
 }
 
-/// Changes one setting in powerclip.ini (keeping its comments) and tells the
+/// Changes one setting in flagra.ini (keeping its comments) and tells the
 /// recorder to pick it up.
 #[tauri::command]
 fn set_setting(app: AppHandle, state: State<UiState>, key: String, value: String) -> Result<Value, String> {
@@ -368,7 +368,7 @@ fn clip_path(state: &UiState, path: &str) -> Result<PathBuf, String> {
 
 #[tauri::command]
 fn save_clip() -> Result<(), String> {
-    let h = recorder_window().ok_or("PowerClip isn't recording (:start starts it)")?;
+    let h = recorder_window().ok_or("flagra isn't recording (:start starts it)")?;
     unsafe { PostMessageW(Some(h), WM_REMOTE_CLIP, WPARAM(0), LPARAM(0)) }.map_err(|e| e.to_string())
 }
 
@@ -474,7 +474,7 @@ fn open_special(state: State<UiState>, what: String) -> Result<(), String> {
             let _ = fs::create_dir_all(&dir);
             dir
         }
-        "log" => state.dir.join("powerclip.log"),
+        "log" => state.dir.join("flagra.log"),
         "ffmpeg_log" => state.dir.join("ffmpeg.log"),
         "ini" => state.cfg_path.clone(),
         _ => return Err(format!("nothing to open called {}", what)),

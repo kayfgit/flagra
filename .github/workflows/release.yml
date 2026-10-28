@@ -1,0 +1,58 @@
+# Push a tag like v0.1.0 (matching "version" in tauri.conf.json) to publish a release.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check the tag matches the app version
+        shell: pwsh
+        run: |
+          $version = (Get-Content tauri.conf.json -Raw | ConvertFrom-Json).version
+          if ("v$version" -ne $env:GITHUB_REF_NAME) {
+            throw "tauri.conf.json says $version but the tag is $env:GITHUB_REF_NAME"
+          }
+
+      - name: Test
+        run: cargo test
+
+      - name: Build installer
+        run: npx --yes @tauri-apps/cli@2 build
+
+      - name: Publish release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          $version = $tag.TrimStart('v')
+          # Stable names, so install.ps1 and README links can use releases/latest/download/…
+          Copy-Item "target/release/bundle/nsis/flagra_${version}_x64-setup.exe" flagra-setup.exe
+          Copy-Item target/release/flagra.exe flagra-portable.exe
+          $notes = @"
+          ## Install
+
+          Paste into PowerShell. It installs for your user (no admin), sets up ffmpeg if you don't have it, and starts flagra:
+
+          ``````powershell
+          irm https://raw.githubusercontent.com/kayfgit/flagra/main/install.ps1 | iex
+          ``````
+
+          Or download **flagra-setup.exe** below, or **flagra-portable.exe** to run without installing.
+          Both need an ffmpeg with ``ddagrab`` (6.1+) next to the exe or on your PATH; the one-liner handles that for you.
+          Then press **Alt+F10** to save the last 20 seconds.
+          "@
+          gh release create $tag flagra-setup.exe flagra-portable.exe --title "flagra $tag" --notes $notes
