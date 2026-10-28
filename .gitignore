@@ -1,6 +1,11 @@
 # Build output
 /target
 /gen
+/build
+/out
+
+# Downloaded by ffmpeg\fetch.ps1
+/ffmpeg/dist/
 
 # Created next to the exe at runtime
 flagra.ini

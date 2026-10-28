@@ -21,48 +21,7 @@ Start-Process $setup -ArgumentList '/S' -Wait
 Remove-Item $setup -ErrorAction SilentlyContinue
 if (-not (Test-Path $exe)) { throw "Install finished but $exe is missing" }
 
-# flagra records through ffmpeg, and needs a build with ddagrab (Windows screen
-# capture, ffmpeg 6.1+). Use one that's already installed, otherwise fetch one.
-function Test-Ffmpeg($path) {
-  try { (& $path -hide_banner -filters 2>$null | Out-String) -match '\bddagrab\b' } catch { $false }
-}
-$ffmpeg = Join-Path $dir 'ffmpeg\ffmpeg.exe'
-$onPath = Get-Command ffmpeg -ErrorAction SilentlyContinue
-if ((Test-Path $ffmpeg) -and (Test-Ffmpeg $ffmpeg)) {
-  Write-Host 'ffmpeg is already set up.'
-} elseif ($onPath -and (Test-Ffmpeg $onPath.Source)) {
-  Write-Host "Using the ffmpeg on your PATH ($($onPath.Source))."
-} else {
-  # The "essentials" build from gyan.dev, the Windows build ffmpeg.org links to.
-  $ffUrl = 'https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip'
-  $zip = Join-Path $env:TEMP 'flagra-ffmpeg.zip'
-  $sum = Join-Path $env:TEMP 'flagra-ffmpeg.zip.sha256'
-  Write-Host 'Downloading ffmpeg (about 110 MB, only this once)...'
-  Invoke-WebRequest $ffUrl -OutFile $zip -UseBasicParsing
-  Invoke-WebRequest "$ffUrl.sha256" -OutFile $sum -UseBasicParsing
-  $expected = ((Get-Content $sum -Raw).Trim() -split '\s+')[0]
-  $actual = (Get-FileHash $zip -Algorithm SHA256).Hash
-  Remove-Item $sum
-  if ($actual -ne $expected) {
-    Remove-Item $zip
-    throw 'The ffmpeg download is damaged (checksum mismatch). Run the installer again.'
-  }
-
-  # Only ffmpeg.exe is needed, not the whole package.
-  Add-Type -AssemblyName System.IO.Compression.FileSystem
-  New-Item -ItemType Directory -Force (Split-Path $ffmpeg) | Out-Null
-  $archive = [IO.Compression.ZipFile]::OpenRead($zip)
-  try {
-    $entry = $archive.Entries | Where-Object FullName -like '*/bin/ffmpeg.exe' | Select-Object -First 1
-    if (-not $entry) { throw 'ffmpeg.exe is missing from the download.' }
-    [IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $ffmpeg, $true)
-  } finally {
-    $archive.Dispose()
-    Remove-Item $zip
-  }
-  if (-not (Test-Ffmpeg $ffmpeg)) { throw 'The downloaded ffmpeg cannot capture the screen (no ddagrab).' }
-}
-
+# The installer comes with the ffmpeg flagra records through (in flagra\ffmpeg).
 Start-Process $exe
 
 # Show the hotkey actually in use (it may have been changed in an earlier install).

@@ -193,7 +193,7 @@ const SETTINGS = [
   },
   {
     key: 'ffmpeg_path', label: 'ffmpeg', cmd: 'ffmpeg',
-    value: c => c.ffmpeg_path ?? ['auto', ' (next to flagra.exe, then PATH)'],
+    value: c => c.ffmpeg_path ?? ['auto', ' (the one that comes with flagra)'],
   },
 ];
 

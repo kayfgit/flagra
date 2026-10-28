@@ -26,11 +26,15 @@ jobs:
             throw "tauri.conf.json says $version but the tag is $env:GITHUB_REF_NAME"
           }
 
+      - name: Fetch the bundled ffmpeg
+        shell: pwsh
+        run: ./ffmpeg/fetch.ps1
+
       - name: Test
         run: cargo test
 
       - name: Build installer
-        run: npx --yes @tauri-apps/cli@2 build
+        run: npx --yes @tauri-apps/cli@2 build --config tauri.bundle.conf.json
 
       - name: Publish release
         shell: pwsh
@@ -41,18 +45,22 @@ jobs:
           $version = $tag.TrimStart('v')
           # Stable names, so install.ps1 and README links can use releases/latest/download/…
           Copy-Item "target/release/bundle/nsis/flagra_${version}_x64-setup.exe" flagra-setup.exe
-          Copy-Item target/release/flagra.exe flagra-portable.exe
+          # Portable: flagra.exe with its ffmpeg folder next to it, laid out like an install.
+          New-Item -ItemType Directory -Force portable/ffmpeg | Out-Null
+          Copy-Item target/release/flagra.exe portable/
+          Copy-Item ffmpeg/dist/ffmpeg.exe, ffmpeg/dist/README.txt portable/ffmpeg/
+          Copy-Item ffmpeg/dist/COPYING.GPLv2 portable/ffmpeg/COPYING.GPLv2.txt
+          Compress-Archive portable/* flagra-portable.zip
           $notes = @"
           ## Install
 
-          Paste into PowerShell. It installs for your user (no admin), sets up ffmpeg if you don't have it, and starts flagra:
+          Paste into PowerShell. It installs for your user (no admin) and starts flagra:
 
           ``````powershell
           irm https://raw.githubusercontent.com/kayfgit/flagra/main/install.ps1 | iex
           ``````
 
-          Or download **flagra-setup.exe** below, or **flagra-portable.exe** to run without installing.
-          Both need an ffmpeg with ``ddagrab`` (6.1+) next to the exe or on your PATH; the one-liner handles that for you.
-          Then press **Alt+F10** to save the last 20 seconds.
+          Or download **flagra-setup.exe** below, or **flagra-portable.zip** to run it from any folder without installing.
+          Both come with the ffmpeg flagra needs. Then press **Alt+F10** to save the last 20 seconds.
           "@
-          gh release create $tag flagra-setup.exe flagra-portable.exe --title "flagra $tag" --notes $notes
+          gh release create $tag flagra-setup.exe flagra-portable.zip --title "flagra $tag" --notes $notes

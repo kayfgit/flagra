@@ -1,10 +1,10 @@
 ; Hooks for Tauri's NSIS installer (see tauri.conf.json > bundle > windows > nsis).
 
-; The uninstaller only removes files it installed itself. flagra also keeps
-; files next to its exe: the ffmpeg\ folder install.ps1 downloads and its logs.
-; Updates run the old uninstaller too, so leave them alone then (re-downloading
-; ffmpeg on every update would be a waste). flagra.ini, the user's settings,
-; always stays; clips live in Videos\flagra and are never touched.
+; The uninstaller only removes files it installed itself. flagra also writes
+; files next to its exe (its logs), and older versions' install.ps1 put a
+; downloaded ffmpeg in ffmpeg\, so clear those too.
+; Updates run the old uninstaller too, so skip all this then. flagra.ini, the
+; user's settings, always stays; clips live in Videos\flagra and are never touched.
 !macro NSIS_HOOK_POSTUNINSTALL
   ${If} $UpdateMode <> 1
     ; flagra adds itself here for "start with Windows" (not the installer), so remove it too.

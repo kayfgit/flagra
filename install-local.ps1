@@ -5,7 +5,8 @@
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
 
-npx --yes @tauri-apps/cli@2 build
+& (Join-Path $PSScriptRoot 'ffmpeg\fetch.ps1')
+npx --yes @tauri-apps/cli@2 build --config tauri.bundle.conf.json
 if ($LASTEXITCODE) { throw 'Build failed' }
 $version = (Get-Content tauri.conf.json -Raw | ConvertFrom-Json).version
 $setup = "target\release\bundle\nsis\flagra_${version}_x64-setup.exe"

@@ -1,0 +1,10 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "resources": {
+      "ffmpeg/dist/ffmpeg.exe": "ffmpeg/ffmpeg.exe",
+      "ffmpeg/dist/COPYING.GPLv2": "ffmpeg/COPYING.GPLv2.txt",
+      "ffmpeg/dist/README.txt": "ffmpeg/README.txt"
+    }
+  }
+}

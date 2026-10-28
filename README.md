@@ -11,8 +11,7 @@ Press a hotkey, get the last N seconds as an `.mp4`.
 
 ## Install
 
-Paste this into PowerShell. It installs flagra for your user (no admin rights, no clicks), sets up
-ffmpeg if you don't already have one, and starts it:
+Paste this into PowerShell. It installs flagra for your user (no admin rights, no clicks) and starts it:
 
 ```powershell
 irm https://raw.githubusercontent.com/kayfgit/flagra/main/install.ps1 | iex
@@ -23,9 +22,9 @@ with Windows, so it's always recording (`:autostart` turns that off). Run the sa
 your settings are kept.
 
 You can also download [flagra-setup.exe](https://github.com/kayfgit/flagra/releases/latest/download/flagra-setup.exe),
-or [flagra-portable.exe](https://github.com/kayfgit/flagra/releases/latest/download/flagra-portable.exe) to run it
-without installing. Those two need an `ffmpeg.exe` 6.1+ (with `ddagrab`) next to the exe or on your `PATH`
-(e.g. `scoop install ffmpeg`); the one-liner takes care of that. flagra needs Windows 10 or 11.
+or [flagra-portable.zip](https://github.com/kayfgit/flagra/releases/latest/download/flagra-portable.zip) to run it
+from any folder without installing. Everything comes with the ffmpeg flagra needs, so there's nothing else to
+install. flagra needs Windows 10 or 11.
 
 To uninstall, use **Settings › Apps**. Your clips in `Videos\flagra` are never touched.
 
@@ -35,14 +34,29 @@ To uninstall, use **Settings › Apps**. Your clips in `Videos\flagra` are never
 cargo build --release
 ```
 
-The exe ends up at `target\release\flagra.exe` (~3.2 MB, the GUI is embedded). Copy it anywhere.
-On first run it writes `flagra.ini` next to itself. The GUI uses WebView2, which ships with Windows 11
-(and almost every Windows 10). `npx @tauri-apps/cli@2 build` also builds the installer; pushing a
-`v*` tag makes GitHub Actions build both and publish a release.
+The exe ends up at `target\release\flagra.exe` (~3.2 MB, the GUI is embedded). On first run it writes
+`flagra.ini` next to itself. The GUI uses WebView2, which ships with Windows 11 (and almost every
+Windows 10). A plain build like this has no ffmpeg of its own, so it uses one on your `PATH`.
 
-To try changes before releasing them, `.\install-local.ps1` builds this checkout and installs it where the
-one-liner does (settings kept), then restarts flagra.
+The installer bundles flagra's own ffmpeg:
 
+```bash
+./ffmpeg/fetch.ps1
+npx @tauri-apps/cli@2 build --config tauri.bundle.conf.json
+```
+
+To try changes before releasing them, `.\install-local.ps1` does both, installs the result where the
+one-liner does (settings kept), and restarts flagra. Pushing a `v*` tag makes GitHub Actions build the
+installer and the portable zip and publish a release.
+
+### The bundled ffmpeg
+
+flagra runs ffmpeg as a separate program. Rather than depend on whatever ffmpeg a PC has (or a ~100 MB
+general-purpose build), it ships a small one with only what it uses, pinned to the version it's tested with.
+[ffmpeg/build.sh](ffmpeg/build.sh) cross-compiles it (with x264) for Windows; the
+[ffmpeg workflow](.github/workflows/ffmpeg.yml) builds it, checks it on Windows and publishes it, with its exact
+sources, as a release named `ffmpeg-<version>-<build>`. [ffmpeg/version.env](ffmpeg/version.env) says which one
+flagra bundles: bump `BUILD` there to publish a new one. `ffmpeg_path` in the settings still overrides it.
 ## Use
 
 | | |
@@ -167,3 +181,8 @@ hotkey → copy the last N s of the ring → remux to .mp4 (no re-encode)
 - Exclusive-fullscreen games that block Desktop Duplication show up black. Borderless/windowed always works,
   and most modern "fullscreen" modes do too.
 - Records one monitor; no microphone yet.
+
+## License
+
+flagra is MIT licensed ([LICENSE](LICENSE)). The ffmpeg it ships is GPL v2 or later; see
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for that and where its source is.

@@ -332,7 +332,7 @@ pub fn resolve_ffmpeg(cfg: &Config, app_dir: &Path) -> Result<PathBuf, String> {
     let found = if let Some(p) = &cfg.ffmpeg_path {
         p.exists().then(|| p.clone()).ok_or_else(|| format!("ffmpeg_path {} does not exist", p.display()))?
     } else {
-        // Next to flagra.exe, then the ffmpeg\ folder the installer fills, then PATH.
+        // Next to flagra.exe, then the ffmpeg\ folder flagra comes with, then PATH.
         [app_dir.join("ffmpeg.exe"), app_dir.join("ffmpeg").join("ffmpeg.exe")]
             .into_iter()
             .find(|p| p.exists())
@@ -340,7 +340,7 @@ pub fn resolve_ffmpeg(cfg: &Config, app_dir: &Path) -> Result<PathBuf, String> {
                 std::env::var_os("PATH")
                     .and_then(|path| std::env::split_paths(&path).map(|d| d.join("ffmpeg.exe")).find(|p| p.exists()))
             })
-            .ok_or("ffmpeg.exe not found: run the installer again, put it next to flagra.exe, or set ffmpeg_path")?
+            .ok_or("ffmpeg.exe not found: reinstall flagra (it comes with one), or set ffmpeg_path")?
     };
     Ok(unshim(found))
 }

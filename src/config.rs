@@ -41,7 +41,7 @@ pub struct Config {
     pub priority: Priority,
     /// None = <Videos>\flagra.
     pub output_dir: Option<PathBuf>,
-    /// None = ffmpeg.exe next to flagra.exe, then PATH.
+    /// None = the ffmpeg bundled with flagra (or one next to flagra.exe, or on PATH).
     pub ffmpeg_path: Option<PathBuf>,
     pub beep: bool,
     pub notify: bool,
@@ -126,7 +126,7 @@ priority = below_normal
 # Where clips go. Empty = your Videos folder\flagra.
 output_dir =
 
-# Path to ffmpeg.exe. Empty = ffmpeg.exe next to flagra.exe, otherwise the one on PATH.
+# Path to ffmpeg.exe. Empty = the one that comes with flagra (or one next to flagra.exe, or on PATH).
 ffmpeg_path =
 
 # Beep when a clip is saved (works in fullscreen games), and show a notification.
