@@ -18,7 +18,8 @@ ffmpeg if you don't already have one, and starts it:
 irm https://raw.githubusercontent.com/kayfgit/flagra/main/install.ps1 | iex
 ```
 
-Then press **Alt+F10** whenever something worth keeping happens. Run the same command again to update;
+Then press **Alt+F10** whenever something worth keeping happens, and **Alt+F9** to open flagra. It starts
+with Windows, so it's always recording (`:autostart` turns that off). Run the same command again to update;
 your settings are kept.
 
 You can also download [flagra-setup.exe](https://github.com/kayfgit/flagra/releases/latest/download/flagra-setup.exe),
@@ -38,6 +39,9 @@ The exe ends up at `target\release\flagra.exe` (~3.2 MB, the GUI is embedded). C
 On first run it writes `flagra.ini` next to itself. The GUI uses WebView2, which ships with Windows 11
 (and almost every Windows 10). `npx @tauri-apps/cli@2 build` also builds the installer; pushing a
 `v*` tag makes GitHub Actions build both and publish a release.
+
+To try changes before releasing them, `.\install-local.ps1` builds this checkout and installs it where the
+one-liner does (settings kept), then restarts flagra.
 
 ## Use
 
@@ -93,7 +97,6 @@ flagra.exe --clip
 
 `flagra.exe --quit` stops the running instance.
 
-To start it with Windows, put a shortcut to `flagra.exe` in the `shell:startup` folder.
 
 ## Settings (`flagra.ini`)
 
@@ -117,6 +120,7 @@ The window edits this file for you (keeping its comments). Editing it by hand wo
 | `output_dir` | *(Videos\flagra)* | |
 | `ffmpeg_path` | *(auto)* | |
 | `beep` / `notify` | `true` | Beep (audible in fullscreen games) and a tray notification on save. |
+| `start_with_windows` | `true` | Starts flagra when you log in (a per-user Run entry; Task Manager's Startup apps switch still applies). |
 
 ### What it costs
 

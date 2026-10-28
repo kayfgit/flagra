@@ -1,6 +1,7 @@
 #![windows_subsystem = "windows"]
 
 mod audio;
+mod autostart;
 mod config;
 mod hotkey;
 mod logging;
@@ -121,6 +122,7 @@ fn main() {
         log!("settings: {}", w);
     }
     log!("flagra started: {:?}", cfg);
+    autostart::sync(cfg.start_with_windows);
     let cfg = Arc::new(Mutex::new(cfg));
     let rec = Recorder::start(dir.clone(), cfg.clone());
 
@@ -262,6 +264,9 @@ fn reload(quiet: bool) {
         a.rec.restart();
     } else if old.clip_seconds != cfg.clip_seconds {
         a.rec.set_clip_seconds(cfg.clip_seconds);
+    }
+    if old.start_with_windows != cfg.start_with_windows {
+        autostart::sync(cfg.start_with_windows);
     }
     if old.hotkey != cfg.hotkey || old.open_hotkey != cfg.open_hotkey {
         register_hotkeys();

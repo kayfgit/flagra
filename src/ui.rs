@@ -42,7 +42,7 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 /// Settings the GUI may change, in the order it shows them.
 const KEYS: &[&str] = &[
     "hotkey", "open_hotkey", "clip_seconds", "fps", "resolution", "video_bitrate_kbps", "preset", "audio",
-    "audio_bitrate_kbps", "monitor", "draw_mouse", "priority", "output_dir", "ffmpeg_path", "beep", "notify",
+    "audio_bitrate_kbps", "monitor", "draw_mouse", "priority", "output_dir", "ffmpeg_path", "beep", "notify", "start_with_windows",
 ];
 
 struct CpuSample {
@@ -244,6 +244,7 @@ fn config_json(c: &Config) -> Value {
         "ffmpeg_path": c.ffmpeg_path.as_ref().map(|p| p.to_string_lossy().into_owned()),
         "beep": c.beep,
         "notify": c.notify,
+        "start_with_windows": c.start_with_windows,
     })
 }
 
@@ -317,7 +318,7 @@ fn last_capture_error(dir: &Path) -> Option<String> {
     tail.lines()
         .rev()
         .filter_map(|l| l.split_once("] ").map(|(_, m)| m))
-        .find(|m| m.starts_with("capture:") && !m.starts_with("capture: starting"))
+        .find(|m| m.starts_with("capture:") && !m.starts_with("capture: starting") && !m.starts_with("capture: restarting"))
         .map(|m| m.trim_start_matches("capture: ").to_string())
 }
 

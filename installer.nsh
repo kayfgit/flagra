@@ -7,6 +7,8 @@
 ; always stays; clips live in Videos\flagra and are never touched.
 !macro NSIS_HOOK_POSTUNINSTALL
   ${If} $UpdateMode <> 1
+    ; flagra adds itself here for "start with Windows" (not the installer), so remove it too.
+    DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "flagra"
     RMDir /r "$INSTDIR\ffmpeg"
     Delete "$INSTDIR\flagra.log"
     Delete "$INSTDIR\ffmpeg.log"

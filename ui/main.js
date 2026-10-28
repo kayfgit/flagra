@@ -54,7 +54,7 @@ function browserApi() {
     hotkey: 'Alt+F10', open_hotkey: 'Alt+F9', clip_seconds: 20, fps: 60, resolution: 'native', video_bitrate_kbps: 10000,
     preset: 'ultrafast', audio: true, audio_bitrate_kbps: 160, monitor: 0, draw_mouse: true,
     priority: 'below_normal', output_dir: 'C:\\Users\\you\\Videos\\flagra', output_dir_custom: false,
-    ffmpeg_path: null, beep: true, notify: true,
+    ffmpeg_path: null, beep: true, notify: true, start_with_windows: true,
   };
   const capture = new Set(['fps', 'resolution', 'video_bitrate_kbps', 'preset', 'audio', 'audio_bitrate_kbps',
     'monitor', 'draw_mouse', 'priority', 'ffmpeg_path']);
@@ -187,6 +187,10 @@ const SETTINGS = [
   },
   { key: 'beep', label: 'beep on save', cmd: 'beep', bool: true, value: c => (c.beep ? 'on' : 'off') },
   { key: 'notify', label: 'notification', cmd: 'notify', bool: true, value: c => (c.notify ? 'on' : 'off') },
+  {
+    key: 'start_with_windows', label: 'start with Windows', cmd: 'autostart', bool: true,
+    value: c => (c.start_with_windows ? ['on', ' · records from the moment you log in'] : 'off'),
+  },
   {
     key: 'ffmpeg_path', label: 'ffmpeg', cmd: 'ffmpeg',
     value: c => c.ffmpeg_path ?? ['auto', ' (next to flagra.exe, then PATH)'],
@@ -651,6 +655,7 @@ const COMMANDS = {
   mouse: onOff('draw_mouse', 'mouse cursor', v => (v ? 'shown' : 'hidden')),
   beep: onOff('beep', 'beep on save', v => (v ? 'on' : 'off')),
   notify: onOff('notify', 'notification on save', v => (v ? 'on' : 'off')),
+  autostart: onOff('start_with_windows', 'start with Windows', v => (v ? 'on' : 'off')),
   priority: arg => (!arg ? { label: `idle, below, normal or above (now ${priorityLabel(config.priority)})` } : attempt(() => {
     const p = PRIORITIES[arg.toLowerCase()];
     if (!p) throw 'idle, below, normal or above';
@@ -794,7 +799,7 @@ function showHelp() {
     [':hotkey', 'press a new combo for saving clips'], [':openkey', 'press a new combo for opening flagra (:openkey off)'],
     [':monitor 1', 'which display'], [':mouse', 'show / hide the cursor'],
     [':priority below', 'encoder priority'], [':dir D:\\Clips', 'clips folder (:dir reset)'],
-    [':beep  :notify', 'toggle feedback on save'], [':ffmpeg PATH', 'ffmpeg.exe to use (:ffmpeg auto)'],
+    [':beep  :notify', 'toggle feedback on save'], [':autostart', 'toggle starting with Windows'], [':ffmpeg PATH', 'ffmpeg.exe to use (:ffmpeg auto)'],
     [':rename  :delete  :copy', 'act on the selected clip'],
     [':folder  :log  :ini', 'open the clips folder, the log, the settings file'],
     [':start  :stop', 'start / quit the background recorder'], [':q', 'close this window'],

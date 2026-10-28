@@ -241,7 +241,10 @@ fn run_session(s: &Shared, cfg: &Config) -> Result<bool, String> {
                 break Ok(true);
             }
             match child.try_wait() {
-                Ok(Some(status)) => break Err(format!("ffmpeg exited ({}), see ffmpeg.log", status)),
+                Ok(Some(status)) => {
+                    let why = last_ffmpeg_error(&s.dir).unwrap_or_else(|| format!("{}, see ffmpeg.log", status));
+                    break Err(format!("ffmpeg stopped: {}", why));
+                }
                 Ok(None) => {}
                 Err(e) => break Err(e.to_string()),
             }
@@ -270,7 +273,7 @@ fn ffmpeg_args(cfg: &Config, t0_rtc_us: i64) -> Vec<String> {
     }
 
     let scale = match cfg.resolution {
-        Some((w, h)) => format!("scale_d3d11=w={}:h={}:format=nv12", w, h),
+        Some((w, h)) => format!("scale_d3d11=width={}:height={}:format=nv12", w, h),
         None => "scale_d3d11=format=nv12".into(),
     };
     // ddagrab timestamps count from its first frame. On that first frame, setpts
@@ -314,6 +317,17 @@ fn ffmpeg_args(cfg: &Config, t0_rtc_us: i64) -> Vec<String> {
     a
 }
 
+/// The reason ffmpeg gave for stopping: the last error line of ffmpeg.log,
+/// without its "[filter @ 0x...]" prefix, so the window can show it.
+fn last_ffmpeg_error(dir: &Path) -> Option<String> {
+    let text = fs::read(dir.join("ffmpeg.log")).ok()?;
+    let tail = String::from_utf8_lossy(&text[text.len().saturating_sub(4096)..]).into_owned();
+    let lines: Vec<&str> = tail.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    let line = lines.iter().rev().find(|l| l.starts_with('[') && l.contains("] ")).or(lines.last())?;
+    let msg = line.split_once("] ").map_or(*line, |(_, m)| m);
+    Some(msg.chars().take(200).collect())
+}
+
 pub fn resolve_ffmpeg(cfg: &Config, app_dir: &Path) -> Result<PathBuf, String> {
     let found = if let Some(p) = &cfg.ffmpeg_path {
         p.exists().then(|| p.clone()).ok_or_else(|| format!("ffmpeg_path {} does not exist", p.display()))?
@@ -354,4 +368,25 @@ unsafe fn create_kill_job() -> isize {
         std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
     );
     job.0 as isize
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn last_ffmpeg_error_gives_the_reason_without_the_prefix() {
+        let dir = std::env::temp_dir().join(format!("flagra-test-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("ffmpeg.log"),
+            "[aist#0:0/pcm_f32le @ 000001] Guessed Channel Layout: stereo\n\
+             [fc#0 @ 000001745f257fc0] Error applying option 'w' to filter 'scale_d3d11': Option not found\n\
+             Error : Option not found\n\n",
+        )
+        .unwrap();
+        let why = last_ffmpeg_error(&dir);
+        let _ = fs::remove_dir_all(&dir);
+        assert_eq!(why.as_deref(), Some("Error applying option 'w' to filter 'scale_d3d11': Option not found"));
+    }
 }

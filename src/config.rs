@@ -45,6 +45,7 @@ pub struct Config {
     pub ffmpeg_path: Option<PathBuf>,
     pub beep: bool,
     pub notify: bool,
+    pub start_with_windows: bool,
     /// Where :move left the window, in logical px from its monitor's corner. None = centered.
     pub window_position: Option<[f64; 2]>,
     /// What :resize left the window at, in logical px. None = the default size.
@@ -70,6 +71,7 @@ impl Default for Config {
             ffmpeg_path: None,
             beep: true,
             notify: true,
+            start_with_windows: true,
             window_position: None,
             window_size: None,
         }
@@ -130,6 +132,9 @@ ffmpeg_path =
 # Beep when a clip is saved (works in fullscreen games), and show a notification.
 beep = true
 notify = true
+
+# Start flagra (recording in the tray) when you log in to Windows.
+start_with_windows = true
 
 # Where the window opens and how big, set by :move and :resize in the window. Empty = centered, default size.
 window_position =
@@ -252,6 +257,7 @@ pub fn parse(text: &str) -> (Config, Vec<String>) {
             "draw_mouse" => boolean(val, &mut c.draw_mouse, &mut bad),
             "beep" => boolean(val, &mut c.beep, &mut bad),
             "notify" => boolean(val, &mut c.notify, &mut bad),
+            "start_with_windows" => boolean(val, &mut c.start_with_windows, &mut bad),
             "priority" => {
                 c.priority = match val.to_ascii_lowercase().replace([' ', '-'], "_").as_str() {
                     "idle" | "low" => Priority::Idle,

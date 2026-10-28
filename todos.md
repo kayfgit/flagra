@@ -11,5 +11,6 @@ empty brackets means its untouched (also means i probably just dumped a random i
 
 done todos get erased shortly after.
 
-[] - start with windows (tradu does), so it records after a reboot without opening it
+[x] - start with windows, so it records after a reboot without opening it
+[x] - any resolution other than native made ffmpeg fail to start (wrong scale_d3d11 option names); the window now shows ffmpeg's actual error
 [] - check the installer's ffmpeg download on a pc that doesn't have ffmpeg yet
