@@ -38,8 +38,10 @@ body {
 
 #top {
   display: flex;
+  align-items: center;
   gap: 24px;
-  padding: 12px 28px 10px;
+  height: 42px;
+  padding-left: 28px;
   font-size: 13px;
   color: var(--muted);
   white-space: nowrap;
@@ -50,6 +52,20 @@ body {
 #rec .sep, #usage .sep { color: var(--dim); margin: 0 8px; }
 #usage { margin-left: auto; }
 #usage b { color: var(--label); font-weight: 500; }
+
+/* Our own minimize / close: the window has no Windows title bar. */
+#winctl { display: flex; align-self: stretch; }
+#winctl button {
+  width: 46px;
+  border: 0;
+  background: none;
+  color: var(--dim);
+  font: 13px var(--mono);
+  cursor: pointer;
+  transition: background .12s, color .12s;
+}
+#winctl button:hover { background: var(--raise); color: var(--bright); }
+#winctl #close:hover { background: var(--error); color: var(--bg); }
 
 /* Main area: the list, with the player above it while a clip plays */
 
@@ -92,9 +108,20 @@ body {
   overflow-y: auto;
   list-style: none;
   padding: 8px 0 12px;
-  scrollbar-width: thin;
-  scrollbar-color: var(--rule) transparent;
 }
+
+/* Scrollbars in the app's colours: a thin rounded thumb, no track, no arrows. */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }
+::-webkit-scrollbar-button { display: none; }
+::-webkit-scrollbar-thumb {
+  background: var(--rule);
+  border: 3px solid var(--bg);
+  border-radius: 5px;
+  min-height: 32px;
+}
+::-webkit-scrollbar-thumb:hover { background: var(--dim); }
+::-webkit-scrollbar-thumb:active { background: var(--amber); }
 
 .row {
   display: grid;

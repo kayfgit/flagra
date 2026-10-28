@@ -13,11 +13,13 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use windows::core::{w, PCWSTR};
-use windows::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS, HWND, LPARAM, LRESULT, POINT, WPARAM};
+use windows::core::{w, PCWSTR, PWSTR};
+use windows::Win32::Foundation::{CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows::Win32::System::Diagnostics::Debug::MessageBeep;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::System::Threading::CreateMutexW;
+use windows::Win32::System::Threading::{
+    CreateMutexW, OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+};
 use windows::Win32::UI::Input::KeyboardAndMouse::{RegisterHotKey, UnregisterHotKey};
 use windows::Win32::UI::Shell::{
     FOLDERID_Videos, SHGetKnownFolderPath, ShellExecuteW, Shell_NotifyIconW, KNOWN_FOLDER_FLAG, NIF_ICON,
@@ -39,6 +41,7 @@ pub const WM_REMOTE_RELOAD: u32 = WM_APP + 5;
 /// From the GUI: returns (buffered ms << 32) | ffmpeg pid.
 pub const WM_STATUS: u32 = WM_APP + 6;
 const HOTKEY_ID: i32 = 1;
+const OPEN_HOTKEY_ID: i32 = 2;
 
 const ID_OPEN: usize = 6;
 const ID_SAVE: usize = 1;
@@ -152,7 +155,7 @@ fn main() {
         app().taskbar_created.store(RegisterWindowMessageW(w!("TaskbarCreated")), Ordering::Relaxed);
 
         add_tray_icon();
-        register_hotkey();
+        register_hotkeys();
         if !warnings.is_empty() {
             notify("flagra settings", &format!("{} (see flagra.log)", warnings[0]), true);
         }
@@ -173,6 +176,7 @@ fn main() {
 unsafe extern "system" fn wndproc(h: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     match msg {
         WM_HOTKEY if wp.0 as i32 == HOTKEY_ID => save_clip(),
+        WM_HOTKEY if wp.0 as i32 == OPEN_HOTKEY_ID => toggle_ui(),
         WM_REMOTE_CLIP => save_clip(),
         WM_REMOTE_QUIT => PostQuitMessage(0),
         WM_REMOTE_RELOAD => reload(wp.0 != 0),
@@ -259,8 +263,8 @@ fn reload(quiet: bool) {
     } else if old.clip_seconds != cfg.clip_seconds {
         a.rec.set_clip_seconds(cfg.clip_seconds);
     }
-    if old.hotkey != cfg.hotkey {
-        register_hotkey();
+    if old.hotkey != cfg.hotkey || old.open_hotkey != cfg.open_hotkey {
+        register_hotkeys();
     }
     unsafe {
         let mut nid = tray_data();
@@ -275,6 +279,9 @@ fn reload(quiet: bool) {
 
 /// Opens the GUI in its own process (or focuses it if it's already open).
 fn open_ui() {
+    // The new process (or the open window it hands over to) has to come to
+    // the front; Windows only lets that happen if we pass on our right to.
+    unsafe { let _ = AllowSetForegroundWindow(ASFW_ANY); }
     if let Ok(exe) = std::env::current_exe() {
         if let Err(e) = std::process::Command::new(exe).arg("--ui").spawn() {
             log!("cannot open the window: {}", e);
@@ -282,17 +289,56 @@ fn open_ui() {
     }
 }
 
-fn register_hotkey() {
-    let combo = app().cfg.lock().unwrap().hotkey.clone();
+/// The open hotkey toggles: it closes the window when that's what you're looking at.
+fn toggle_ui() {
     unsafe {
-        let _ = UnregisterHotKey(Some(hwnd()), HOTKEY_ID);
-        let Ok((mods, vk)) = hotkey::parse(&combo) else { return };
-        if RegisterHotKey(Some(hwnd()), HOTKEY_ID, mods, vk).is_err() {
-            log!("hotkey {} is already taken by another program", combo);
-            notify("flagra", &format!("Hotkey {} is used by another program. Pick another in settings.", combo), true);
-        } else {
-            log!("hotkey {} registered", combo);
+        let fg = GetForegroundWindow();
+        if !fg.is_invalid() && is_our_window(fg) {
+            let _ = PostMessageW(Some(fg), WM_CLOSE, WPARAM(0), LPARAM(0));
+            return;
         }
+    }
+    open_ui();
+}
+
+/// Whether a window belongs to another flagra.exe process (the GUI).
+unsafe fn is_our_window(h: HWND) -> bool {
+    let mut pid = 0u32;
+    GetWindowThreadProcessId(h, Some(&mut pid));
+    if pid == 0 || pid == std::process::id() {
+        return false;
+    }
+    let Ok(process) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) else { return false };
+    let mut buf = [0u16; 1024];
+    let mut len = buf.len() as u32;
+    let ok = QueryFullProcessImageNameW(process, PROCESS_NAME_WIN32, PWSTR(buf.as_mut_ptr()), &mut len).is_ok();
+    let _ = CloseHandle(process);
+    ok && std::env::current_exe().is_ok_and(|me| {
+        PathBuf::from(String::from_utf16_lossy(&buf[..len as usize])).eq(&me)
+    })
+}
+
+fn register_hotkeys() {
+    let (clip, open) = {
+        let cfg = app().cfg.lock().unwrap();
+        (cfg.hotkey.clone(), cfg.open_hotkey.clone())
+    };
+    let mut taken = Vec::new();
+    unsafe {
+        for (id, combo) in [(HOTKEY_ID, Some(clip)), (OPEN_HOTKEY_ID, open)] {
+            let _ = UnregisterHotKey(Some(hwnd()), id);
+            let Some(combo) = combo else { continue };
+            let Ok((mods, vk)) = hotkey::parse(&combo) else { continue };
+            if RegisterHotKey(Some(hwnd()), id, mods, vk).is_err() {
+                log!("hotkey {} is already taken by another program", combo);
+                taken.push(combo);
+            } else {
+                log!("hotkey {} registered", combo);
+            }
+        }
+    }
+    if !taken.is_empty() {
+        notify("flagra", &format!("{} is used by another program. Pick another in settings.", taken.join(" and ")), true);
     }
 }
 
@@ -342,7 +388,11 @@ unsafe fn show_menu(h: HWND) {
     let Ok(menu) = CreatePopupMenu() else { return };
     let hk = app().cfg.lock().unwrap().hotkey.clone();
     let save = wide(&format!("Save clip now\t{}", hk));
-    let _ = AppendMenuW(menu, MF_STRING, ID_OPEN, w!("Open flagra"));
+    let open = wide(&match &app().cfg.lock().unwrap().open_hotkey {
+        Some(k) => format!("Open flagra\t{}", k),
+        None => "Open flagra".to_string(),
+    });
+    let _ = AppendMenuW(menu, MF_STRING, ID_OPEN, PCWSTR(open.as_ptr()));
     let _ = SetMenuDefaultItem(menu, ID_OPEN as u32, 0);
     let _ = AppendMenuW(menu, MF_STRING, ID_SAVE, PCWSTR(save.as_ptr()));
     let _ = AppendMenuW(menu, MF_STRING, ID_FOLDER, w!("Open clips folder"));

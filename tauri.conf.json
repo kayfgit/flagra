@@ -18,6 +18,8 @@
         "minHeight": 420,
         "center": true,
         "visible": false,
+        "decorations": false,
+        "shadow": true,
         "theme": "Dark",
         "backgroundColor": "#0f0e0c",
         "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --enable-features=NetworkServiceInProcess2 --disable-gpu --in-process-gpu --disable-background-networking --disable-component-update"

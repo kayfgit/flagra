@@ -26,6 +26,8 @@ impl Priority {
 #[derive(Clone, Debug)]
 pub struct Config {
     pub hotkey: String,
+    /// Opens (or closes) the window from anywhere. None = no hotkey.
+    pub open_hotkey: Option<String>,
     pub clip_seconds: u32,
     pub fps: u32,
     /// None = capture at the monitor's native resolution.
@@ -43,12 +45,17 @@ pub struct Config {
     pub ffmpeg_path: Option<PathBuf>,
     pub beep: bool,
     pub notify: bool,
+    /// Where :move left the window, in logical px from its monitor's corner. None = centered.
+    pub window_position: Option<[f64; 2]>,
+    /// What :resize left the window at, in logical px. None = the default size.
+    pub window_size: Option<[f64; 2]>,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Config {
             hotkey: "Alt+F10".into(),
+            open_hotkey: Some("Alt+F9".into()),
             clip_seconds: 20,
             fps: 60,
             resolution: None,
@@ -63,6 +70,8 @@ impl Default for Config {
             ffmpeg_path: None,
             beep: true,
             notify: true,
+            window_position: None,
+            window_size: None,
         }
     }
 }
@@ -79,6 +88,9 @@ pub const TEMPLATE: &str = r#"# flagra settings.
 # Keys: A-Z, 0-9, F1-F24, Home, End, Insert, Delete, PageUp, PageDown,
 #       PrintScreen, Pause, ScrollLock, Numpad0-Numpad9, Space, Up, Down, Left, Right.
 hotkey = Alt+F10
+
+# Key combo that opens the flagra window from anywhere (and closes it again). Empty = none.
+open_hotkey = Alt+F9
 
 # How many seconds before the key press end up in the clip.
 clip_seconds = 20
@@ -118,6 +130,10 @@ ffmpeg_path =
 # Beep when a clip is saved (works in fullscreen games), and show a notification.
 beep = true
 notify = true
+
+# Where the window opens and how big, set by :move and :resize in the window. Empty = centered, default size.
+window_position =
+window_size =
 "#;
 
 impl Config {
@@ -191,6 +207,18 @@ pub fn parse(text: &str) -> (Config, Vec<String>) {
                 Ok(_) => c.hotkey = val.to_string(),
                 Err(e) => bad(&e),
             },
+            "open_hotkey" => {
+                if val.is_empty() || val.eq_ignore_ascii_case("off") || val.eq_ignore_ascii_case("none") {
+                    c.open_hotkey = None;
+                } else {
+                    match hotkey::parse(val) {
+                        Ok(_) => c.open_hotkey = Some(val.to_string()),
+                        Err(e) => bad(&e),
+                    }
+                }
+            }
+            "window_position" => pair(val, false, &mut c.window_position, &mut bad),
+            "window_size" => pair(val, true, &mut c.window_size, &mut bad),
             "clip_seconds" => num(val, 1, 600, &mut c.clip_seconds, &mut bad),
             "fps" => num(val, 1, 240, &mut c.fps, &mut bad),
             "video_bitrate_kbps" => num(val, 100, 200_000, &mut c.video_bitrate_kbps, &mut bad),
@@ -248,6 +276,19 @@ fn num(val: &str, min: u32, max: u32, out: &mut u32, bad: &mut impl FnMut(&str))
     match val.parse::<u32>() {
         Ok(n) if (min..=max).contains(&n) => *out = n,
         _ => bad(&format!("expected a number from {} to {}", min, max)),
+    }
+}
+
+/// "x, y" in logical pixels; empty = None. Sizes must be positive.
+fn pair(val: &str, size: bool, out: &mut Option<[f64; 2]>, bad: &mut impl FnMut(&str)) {
+    if val.is_empty() {
+        *out = None;
+        return;
+    }
+    let nums: Vec<f64> = val.split(',').filter_map(|n| n.trim().parse().ok()).collect();
+    match nums[..] {
+        [a, b] if a.is_finite() && b.is_finite() && (!size || (a > 0.0 && b > 0.0)) => *out = Some([a, b]),
+        _ => bad("expected two numbers like 120, 80"),
     }
 }
 

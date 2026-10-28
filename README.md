@@ -44,7 +44,7 @@ On first run it writes `flagra.ini` next to itself. The GUI uses WebView2, which
 | | |
 |---|---|
 | Save a clip | hotkey (default `Alt+F10`), `c` in the window, or tray → *Save clip now* |
-| Open the window | double-click the tray icon, or start `flagra.exe` again while it's running |
+| Open the window | `Alt+F9` from anywhere (press it again to close), double-click the tray icon, or start `flagra.exe` again |
 | Something wrong? | `:log` in the window, or tray → *Open log* (ffmpeg's own errors go to `ffmpeg.log`) |
 
 ## The window
@@ -53,6 +53,11 @@ The recorder runs headless in the tray (~30 MB). The window is a **separate proc
 (`flagra.exe --ui`) that only exists while it's open: closing it (Esc) ends the process and its
 WebView2, and recording carries on untouched. Open, it costs about 90 MB (WebView2 trimmed the same
 way as tradu, GPU off: that measured 50 MB lighter and no more CPU, even while playing clips).
+
+Like tradu it has no Windows title bar: minimize and close sit at the top right, dragging the top or
+bottom bar moves it, and the edges resize it. `:move` and `:resize` do the same from the keyboard
+(`h j k l`, Shift for fine steps, Ctrl for big ones, `↵` when done) and flagra opens there from then
+on; `:move reset` / `:resize reset` undo that. `:f` toggles fullscreen.
 
 Everything is on the keyboard, in the same style as tradu:
 
@@ -66,15 +71,15 @@ Everything is on the keyboard, in the same style as tradu:
 | `c` | save a clip now | |
 | `tab` | settings | clips |
 | `:` | command line | command line |
-| `?` / `esc` | help / close the window | help / close the window |
+| `?` / `esc` | help (`j k` scroll it) / close the window | help / close the window |
 
 While a clip plays: `space` pause, `← →` 5 s (Shift: 1 s), `, .` one frame, `m` mute, `esc` close.
 
 Settings change through commands, with a preview of what they'll do as you type:
 `:len 30`, `:fps 30`, `:res 720p`, `:bitrate 8m`, `:preset veryfast`, `:audio off` / `:audio 192`,
-`:hotkey` (then press the combo), `:monitor 1`, `:mouse`, `:priority below`, `:dir D:\Clips`,
+`:hotkey` / `:openkey` (then press the combo), `:monitor 1`, `:mouse`, `:priority below`, `:dir D:\Clips`,
 `:beep`, `:notify`, `:ffmpeg PATH`. Plus `:clip`, `:folder`, `:log`, `:ini`, `:start` / `:stop`
-(the background recorder) and `:help`.
+(the background recorder), `:move`, `:resize`, `:f`, `:min` and `:help`.
 
 Only settings that change the encoding (fps, resolution, bitrate, preset, audio, monitor, cursor,
 priority, ffmpeg) restart capture, which starts the replay buffer over. The rest (hotkey, clip length,
@@ -97,7 +102,8 @@ The window edits this file for you (keeping its comments). Editing it by hand wo
 
 | Setting | Default | Notes |
 |---|---|---|
-| `hotkey` | `Alt+F10` | Modifiers `Ctrl` `Alt` `Shift` `Win` + one key (`A`-`Z`, `0`-`9`, `F1`-`F24`, `Home`, `PageUp`, `Numpad0`, ...) |
+| `hotkey` | `Alt+F10` | Saves a clip. Modifiers `Ctrl` `Alt` `Shift` `Win` + one key (`A`-`Z`, `0`-`9`, `F1`-`F24`, `Home`, `PageUp`, `Numpad0`, ...) |
+| `open_hotkey` | `Alt+F9` | Opens the window from anywhere, and closes it if it's in front. Empty = none. |
 | `clip_seconds` | `20` | Length of the saved clip (1-600). RAM use grows with this × bitrate. |
 | `fps` | `60` | `30` roughly halves the encoding cost. |
 | `resolution` | `native` | Or e.g. `1280x720`. Scaling happens on the GPU, and a lower resolution saves a lot of CPU. |

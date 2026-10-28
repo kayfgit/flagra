@@ -15,7 +15,7 @@ use std::time::{Instant, UNIX_EPOCH};
 
 use serde::Serialize;
 use serde_json::{json, Value};
-use tauri::{AppHandle, Manager, State, WebviewWindow};
+use tauri::{AppHandle, LogicalSize, Manager, PhysicalPosition, State, WebviewWindow};
 use windows::core::{BOOL, PCWSTR};
 use windows::Win32::Foundation::{CloseHandle, GlobalFree, FILETIME, HANDLE, HWND, LPARAM, POINT, WPARAM};
 use windows::Win32::System::DataExchange::{CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData};
@@ -41,7 +41,7 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// Settings the GUI may change, in the order it shows them.
 const KEYS: &[&str] = &[
-    "hotkey", "clip_seconds", "fps", "resolution", "video_bitrate_kbps", "preset", "audio",
+    "hotkey", "open_hotkey", "clip_seconds", "fps", "resolution", "video_bitrate_kbps", "preset", "audio",
     "audio_bitrate_kbps", "monitor", "draw_mouse", "priority", "output_dir", "ffmpeg_path", "beep", "notify",
 ];
 
@@ -72,12 +72,17 @@ pub fn run(dir: PathBuf) {
         })
         .setup(|app| {
             let state = app.state::<UiState>();
-            allow_clips_dir(app.handle(), &config::load(&state.cfg_path).0);
+            let cfg = config::load(&state.cfg_path).0;
+            allow_clips_dir(app.handle(), &cfg);
+            if let Some(window) = app.get_webview_window("main") {
+                place(&window, &cfg);
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            ready, close, load, status, set_setting, list_clips, save_clip, delete_clip, rename_clip, copy_clip, reveal,
-            play, open_special, start_recorder, stop_recorder,
+            ready, close, minimize, move_window, resize_window, save_placement, reset_placement, toggle_fullscreen,
+            load, status, set_setting, list_clips, save_clip, delete_clip, rename_clip, copy_clip, reveal, play,
+            open_special, start_recorder, stop_recorder,
         ])
         .run(tauri::generate_context!())
         .expect("error while running the flagra window");
@@ -105,6 +110,99 @@ fn ready(window: WebviewWindow) {
     let _ = window.set_focus();
 }
 
+const DEFAULT_SIZE: [f64; 2] = [980.0, 600.0];
+const MIN_SIZE: [f64; 2] = [720.0, 420.0];
+
+/// Opens the window on the monitor under the mouse, at the size and spot
+/// :resize and :move left it (or centered). Always kept fully on screen.
+fn place(window: &WebviewWindow, cfg: &Config) {
+    if let Some([w, h]) = cfg.window_size {
+        let _ = window.set_size(LogicalSize::new(w.max(MIN_SIZE[0]), h.max(MIN_SIZE[1])));
+    }
+    let placed = (|| {
+        let cursor = window.cursor_position().ok()?;
+        let monitor = window.monitor_from_point(cursor.x, cursor.y).ok()??;
+        let size = window.outer_size().ok()?;
+        let (origin, area, scale) = (monitor.position(), monitor.size(), monitor.scale_factor());
+        let (w, h) = (size.width as i32, size.height as i32);
+        let (x, y) = match cfg.window_position {
+            Some([x, y]) => ((x * scale) as i32, (y * scale) as i32),
+            None => ((area.width as i32 - w) / 2, (area.height as i32 - h) / 2),
+        };
+        let x = x.clamp(0, (area.width as i32 - w).max(0));
+        let y = y.clamp(0, (area.height as i32 - h).max(0));
+        window.set_position(PhysicalPosition::new(origin.x + x, origin.y + y)).ok()
+    })();
+    if placed.is_none() {
+        let _ = window.center();
+    }
+}
+
+#[tauri::command]
+fn minimize(window: WebviewWindow) {
+    let _ = window.minimize();
+}
+
+/// One :move step, in logical pixels.
+#[tauri::command]
+fn move_window(window: WebviewWindow, dx: f64, dy: f64) {
+    let scale = window.scale_factor().unwrap_or(1.0);
+    if let Ok(pos) = window.outer_position() {
+        let _ = window.set_position(PhysicalPosition::new(pos.x + (dx * scale) as i32, pos.y + (dy * scale) as i32));
+    }
+}
+
+/// One :resize step, in logical pixels.
+#[tauri::command]
+fn resize_window(window: WebviewWindow, dw: f64, dh: f64) {
+    let scale = window.scale_factor().unwrap_or(1.0);
+    if let Ok(size) = window.inner_size() {
+        let size = size.to_logical::<f64>(scale);
+        let _ = window.set_size(LogicalSize::new((size.width + dw).max(MIN_SIZE[0]), (size.height + dh).max(MIN_SIZE[1])));
+    }
+}
+
+/// Remembers where :move ("position") or :resize ("size") left the window.
+#[tauri::command]
+fn save_placement(window: WebviewWindow, state: State<UiState>, what: String) -> Result<(), String> {
+    let scale = window.scale_factor().map_err(|e| e.to_string())?;
+    let value = if what == "position" {
+        let monitor = window.current_monitor().ok().flatten().ok_or("the window isn't on a monitor")?;
+        let pos = window.outer_position().map_err(|e| e.to_string())?;
+        let origin = monitor.position();
+        format!("{}, {}", ((pos.x - origin.x) as f64 / scale).round(), ((pos.y - origin.y) as f64 / scale).round())
+    } else {
+        let size = window.inner_size().map_err(|e| e.to_string())?.to_logical::<f64>(scale);
+        format!("{}, {}", size.width.round(), size.height.round())
+    };
+    write_placement(&state, &what, &value)
+}
+
+/// :move reset / :resize reset: back to centered, or to the default size.
+#[tauri::command]
+fn reset_placement(window: WebviewWindow, state: State<UiState>, what: String) -> Result<(), String> {
+    write_placement(&state, &what, "")?;
+    if what == "size" {
+        let _ = window.set_size(LogicalSize::new(DEFAULT_SIZE[0], DEFAULT_SIZE[1]));
+    }
+    place(&window, &config::load(&state.cfg_path).0);
+    Ok(())
+}
+
+fn write_placement(state: &UiState, what: &str, value: &str) -> Result<(), String> {
+    let key = if what == "position" { "window_position" } else { "window_size" };
+    let text = fs::read_to_string(&state.cfg_path).unwrap_or_else(|_| config::TEMPLATE.to_string());
+    fs::write(&state.cfg_path, config::set_value(&text, key, value)).map_err(|e| format!("cannot save settings: {}", e))
+}
+
+/// :f / :fullscreen. Returns whether the window is now fullscreen.
+#[tauri::command]
+fn toggle_fullscreen(window: WebviewWindow) -> bool {
+    let on = !window.is_fullscreen().unwrap_or(false);
+    let _ = window.set_fullscreen(on);
+    on
+}
+
 /// Closing ends this process, and WebView2 with it; the recorder keeps going.
 #[tauri::command]
 fn close(app: AppHandle) {
@@ -125,6 +223,7 @@ fn load(state: State<UiState>) -> Value {
 fn config_json(c: &Config) -> Value {
     json!({
         "hotkey": c.hotkey,
+        "open_hotkey": c.open_hotkey,
         "clip_seconds": c.clip_seconds,
         "fps": c.fps,
         "resolution": c.resolution.map_or("native".to_string(), |(w, h)| format!("{}x{}", w, h)),
@@ -242,8 +341,20 @@ fn set_setting(app: AppHandle, state: State<UiState>, key: String, value: String
     let (old, _) = config::parse(&text);
     let new_text = config::set_value(&text, &key, value);
     let (cfg, _) = config::parse(&new_text);
-    if key == "hotkey" && !cfg.hotkey.eq_ignore_ascii_case(&old.hotkey) && !hotkey_free(&cfg.hotkey) {
-        return Err(format!("{} is already used by another program", cfg.hotkey));
+    if let (Some(open), true) = (&cfg.open_hotkey, key.ends_with("hotkey")) {
+        if open.eq_ignore_ascii_case(&cfg.hotkey) {
+            return Err(format!("{} is already the {} hotkey", open, if key == "hotkey" { "open" } else { "clip" }));
+        }
+    }
+    let changed = match key.as_str() {
+        "hotkey" => Some(&cfg.hotkey).filter(|k| !k.eq_ignore_ascii_case(&old.hotkey)),
+        "open_hotkey" => cfg.open_hotkey.as_ref().filter(|k| old.open_hotkey.as_ref().is_none_or(|o| !k.eq_ignore_ascii_case(o))),
+        _ => None,
+    };
+    if let Some(combo) = changed {
+        if !hotkey_free(combo) {
+            return Err(format!("{} is already used by another program", combo));
+        }
     }
     fs::write(&state.cfg_path, new_text).map_err(|e| format!("cannot save settings: {}", e))?;
     if let Some(h) = recorder_window() {

@@ -8,7 +8,6 @@ flagra.ini
 
 # Local tooling and notes
 /.claude/
-/todos.md
 .vscode/
 .idea/
 

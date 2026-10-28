@@ -18,6 +18,12 @@ function tauriApi() {
   return {
     ready: () => invoke('ready'),
     close: () => invoke('close'),
+    minimize: () => invoke('minimize'),
+    moveWindow: (dx, dy) => invoke('move_window', { dx, dy }),
+    resizeWindow: (dw, dh) => invoke('resize_window', { dw, dh }),
+    savePlacement: what => invoke('save_placement', { what }),
+    resetPlacement: what => invoke('reset_placement', { what }),
+    fullscreen: () => invoke('toggle_fullscreen'),
     load: () => invoke('load'),
     status: () => invoke('status'),
     set: (key, value) => invoke('set_setting', { key, value: String(value) }),
@@ -45,7 +51,7 @@ function browserApi() {
   let clips = [fake('21-14-02', 40, 20.2), fake('20-56-28', 1100, 10.03), fake('20-41-20', 2500, 8.8),
     fake('2026-10-26_23-02-11', 86400 + 3000, 20.5), fake('2026-10-20_18-40-55', 7 * 86400, 31.1)];
   let config = {
-    hotkey: 'Alt+F10', clip_seconds: 20, fps: 60, resolution: 'native', video_bitrate_kbps: 10000,
+    hotkey: 'Alt+F10', open_hotkey: 'Alt+F9', clip_seconds: 20, fps: 60, resolution: 'native', video_bitrate_kbps: 10000,
     preset: 'ultrafast', audio: true, audio_bitrate_kbps: 160, monitor: 0, draw_mouse: true,
     priority: 'below_normal', output_dir: 'C:\\Users\\you\\Videos\\flagra', output_dir_custom: false,
     ffmpeg_path: null, beep: true, notify: true,
@@ -53,7 +59,9 @@ function browserApi() {
   const capture = new Set(['fps', 'resolution', 'video_bitrate_kbps', 'preset', 'audio', 'audio_bitrate_kbps',
     'monitor', 'draw_mouse', 'priority', 'ffmpeg_path']);
   return {
-    ready: async () => {}, close: async () => {},
+    ready: async () => {}, close: async () => {}, minimize: async () => {},
+    moveWindow: async () => {}, resizeWindow: async () => {}, savePlacement: async () => {}, resetPlacement: async () => {},
+    fullscreen: async () => !document.fullscreenElement,
     load: async () => ({ config, warnings: [], cpus: 6 }),
     status: async () => ({ running: true, recording: true, buffered: 22.8, cpu: 9 + Math.random() * 3, mem_mb: 113 }),
     set: async (key, value) => {
@@ -84,7 +92,9 @@ let view = 'clips';              // 'clips' | 'settings'
 const sel = { clips: 0, settings: 0 };
 let playing = null;              // path of the clip in the player
 let commandMode = false;
-let hotkeyMode = false;
+let hotkeyMode = null;           // which setting a combo is being captured for: 'hotkey' | 'open_hotkey'
+let windowMode = null;           // 'move' | 'resize' while placing the window with hjkl
+let fullscreen = false;
 let helpOpen = false;
 let deleteArmed = 0;             // time of the first d of dd
 let awaitingClip = 0;            // time we asked the recorder for a clip
@@ -148,7 +158,8 @@ function h(tag, cls, ...children) {
 // ---------------------------------------------------------------- settings rows
 
 const SETTINGS = [
-  { key: 'hotkey', label: 'hotkey', cmd: 'hotkey', value: c => c.hotkey },
+  { key: 'hotkey', label: 'clip hotkey', cmd: 'hotkey', value: c => c.hotkey },
+  { key: 'open_hotkey', label: 'open hotkey', cmd: 'openkey', value: c => c.open_hotkey ?? ['off', ' · :openkey to set one'] },
   { key: 'clip_seconds', label: 'clip length', cmd: 'len', value: c => `${c.clip_seconds} s` },
   { key: 'fps', label: 'frame rate', cmd: 'fps', value: c => `${c.fps} fps` },
   {
@@ -233,7 +244,7 @@ function settingRows() {
     const li = h('li', 'row',
       h('span', 'label', s.label),
       h('span', 'value', main, note && h('span', 'note', note)),
-      h('span', 'cmd', s.bool ? `↵ toggles · :${s.cmd}` : s.key === 'hotkey' ? '↵ press a new combo' : `:${s.cmd}`));
+      h('span', 'cmd', s.bool ? `↵ toggles · :${s.cmd}` : s.key.endsWith('hotkey') ? '↵ press a new combo' : `:${s.cmd}`));
     li.dataset.i = i;
     return li;
   });
@@ -261,7 +272,7 @@ function move(delta, absolute = false) {
 }
 
 function setMode() {
-  el.mode.textContent = hotkeyMode ? 'HOTKEY' : commandMode ? 'COMMAND' : helpOpen ? 'HELP'
+  el.mode.textContent = windowMode ? windowMode.toUpperCase() : hotkeyMode ? 'HOTKEY' : commandMode ? 'COMMAND' : helpOpen ? 'HELP'
     : view === 'settings' ? 'SETTINGS' : playing ? 'PLAYING' : 'CLIPS';
 }
 
@@ -272,11 +283,12 @@ const HINTS = {
   settings: [['↵', 'change'], ['tab', 'clips'], [':', 'command'], ['?', 'help'], ['esc', 'close']],
   command: [['↵', 'run'], ['tab', 'complete'], ['esc', 'cancel']],
   hotkey: [['press', 'the new combo'], ['esc', 'cancel']],
-  help: [['esc', 'back']],
+  help: [['j k', 'scroll'], ['g G', 'top / bottom'], ['esc', 'back']],
+  window: [['h j k l', 'step'], ['shift', 'fine'], ['ctrl', 'big'], ['↵ esc', 'done']],
 };
 
 function setHints() {
-  const which = hotkeyMode ? 'hotkey' : commandMode ? 'command' : helpOpen ? 'help'
+  const which = windowMode ? 'window' : hotkeyMode ? 'hotkey' : commandMode ? 'command' : helpOpen ? 'help'
     : view === 'settings' ? 'settings' : playing ? 'player' : 'clips';
   const hints = [...HINTS[which]];
   const draw = () => el.hints.replaceChildren(...hints.map(([k, label]) => h('span', null, h('b', null, k), label)));
@@ -451,7 +463,7 @@ async function applySetting(key, value) {
 function activateSetting() {
   const s = SETTINGS[sel.settings];
   if (s.bool) applySetting(s.key, !config[s.key]);
-  else if (s.key === 'hotkey') enterHotkeyMode();
+  else if (s.key.endsWith('hotkey')) enterHotkeyMode(s.key);
   else openCommand(`${s.cmd} ${settingArg(s)}`, s.cmd.length + 1);
 }
 
@@ -471,15 +483,16 @@ function keyName(vk) {
   return KEY_NAMES[vk] ?? null;
 }
 
-function enterHotkeyMode() {
-  hotkeyMode = true;
-  say(`press the new combo · now ${config.hotkey}`);
+function enterHotkeyMode(key = 'hotkey') {
+  hotkeyMode = key;
+  const what = key === 'hotkey' ? 'saving a clip' : 'opening flagra';
+  say(`press the new combo for ${what} · now ${config[key] ?? 'off'}`);
   setMode();
   setHints();
 }
 
 function exitHotkeyMode() {
-  hotkeyMode = false;
+  hotkeyMode = null;
   setMode();
   setHints();
 }
@@ -494,8 +507,63 @@ function captureHotkey(e) {
     say(`add Ctrl, Alt or Shift: ${key} alone would stop typing it anywhere else`, 'error');
     return;
   }
+  const target = hotkeyMode;
   exitHotkeyMode();
-  applySetting('hotkey', [...mods, key].join('+'));
+  applySetting(target, [...mods, key].join('+'));
+}
+
+// ---------------------------------------------------------------- window placement
+
+// Like tradu's and the browser's :move/:resize: hjkl (or arrows) step 40px,
+// Shift 8px, Ctrl 200px; Esc or Enter is done. Keys are matched by position,
+// so Shift/Ctrl don't change them.
+const WINDOW_STEP = { normal: 40, fine: 8, big: 200 };
+const WINDOW_KEYS = { 72: [-1, 0], 76: [1, 0], 74: [0, 1], 75: [0, -1], 37: [-1, 0], 39: [1, 0], 40: [0, 1], 38: [0, -1] };
+
+function enterWindowMode(mode) {
+  if (fullscreen) { say(`leave fullscreen first (:f) to ${mode} the window`, 'error'); return; }
+  windowMode = mode;
+  say(`${mode} with h j k l (Shift: fine, Ctrl: big) · ↵ or esc when done`);
+  setMode();
+  setHints();
+}
+
+function exitWindowMode() {
+  const mode = windowMode;
+  windowMode = null;
+  setMode();
+  setHints();
+  api.savePlacement(mode === 'move' ? 'position' : 'size')
+    .then(() => say(`flagra opens ${mode === 'move' ? 'there' : 'at this size'} from now on`, 'done'))
+    .catch(err => say(errText(err), 'error'));
+}
+
+document.addEventListener('keydown', e => {
+  if (!windowMode) return;
+  e.preventDefault();
+  e.stopImmediatePropagation();
+  const step = e.ctrlKey ? WINDOW_STEP.big : e.shiftKey ? WINDOW_STEP.fine : WINDOW_STEP.normal;
+  const dir = WINDOW_KEYS[e.keyCode];
+  if (dir) (windowMode === 'move' ? api.moveWindow : api.resizeWindow)(dir[0] * step, dir[1] * step);
+  else if (e.key === 'Escape' || e.key === 'Enter') exitWindowMode();
+}, true);
+
+function placementCommand(mode, arg) {
+  const what = mode === 'move' ? 'position' : 'size';
+  if (/^reset$/i.test(arg ?? '')) {
+    return {
+      label: mode === 'move' ? 'open centered again' : 'back to the default size',
+      run: () => api.resetPlacement(what).then(() => say('done', 'done')).catch(err => say(errText(err), 'error')),
+    };
+  }
+  return { label: `${mode} the window with h j k l · :${mode} reset undoes it`, run: () => enterWindowMode(mode) };
+}
+
+async function toggleFullscreen() {
+  try {
+    fullscreen = await api.fullscreen();
+    say(fullscreen ? 'fullscreen · :f or esc to leave' : '');
+  } catch (err) { say(errText(err), 'error'); }
 }
 
 // ---------------------------------------------------------------- commands
@@ -594,8 +662,16 @@ const COMMANDS = {
   ffmpeg: arg => (!arg ? { label: `path to ffmpeg.exe (now ${config.ffmpeg_path ?? 'auto'}) · :ffmpeg auto to search` }
     : /^auto$/i.test(arg) ? change('ffmpeg_path', '', 'find ffmpeg automatically')
     : change('ffmpeg_path', arg, `use ${arg}`)),
-  hotkey: arg => (!arg ? { label: `press the new combo next (now ${config.hotkey})`, run: enterHotkeyMode }
-    : change('hotkey', arg, `hotkey ${config.hotkey} → ${arg}`)),
+  hotkey: arg => (!arg ? { label: `press the new combo for saving a clip next (now ${config.hotkey})`, run: () => enterHotkeyMode('hotkey') }
+    : change('hotkey', arg, `clip hotkey ${config.hotkey} → ${arg}`)),
+  openkey: arg => (!arg ? { label: `press the new combo for opening flagra next (now ${config.open_hotkey ?? 'off'}) · :openkey off removes it`, run: () => enterHotkeyMode('open_hotkey') }
+    : /^(off|none)$/i.test(arg) ? change('open_hotkey', '', 'no hotkey for opening flagra')
+    : change('open_hotkey', arg, `open hotkey ${config.open_hotkey ?? 'off'} → ${arg}`)),
+  move: arg => placementCommand('move', arg),
+  resize: arg => placementCommand('resize', arg),
+  f: () => ({ label: fullscreen ? 'leave fullscreen' : 'fullscreen', run: toggleFullscreen }),
+  fullscreen: () => ({ label: fullscreen ? 'leave fullscreen' : 'fullscreen', run: toggleFullscreen }),
+  min: () => ({ label: 'minimize the window', run: () => api.minimize() }),
   rename: arg => {
     const c = current();
     if (!c || view !== 'clips') return { error: 'select a clip first' };
@@ -705,11 +781,18 @@ function showHelp() {
     ['m', 'mute'], ['esc', 'close the player'],
     ['Anywhere'],
     ['tab', 'clips ⇄ settings'], [':', 'command line'], ['esc', 'close the window (recording continues)'],
+    [config?.open_hotkey ?? ':openkey', 'open / close flagra from anywhere'],
+    ['Window'],
+    [':move', 'move it with h j k l (Shift: fine, Ctrl: big), ↵ when done · :move reset'],
+    [':resize', 'resize it the same way · :resize reset'],
+    [':f  :fullscreen', 'toggle fullscreen'], [':min', 'minimize'],
+    ['drag', 'the top or bottom bar moves the window; its edges resize it'],
     ['Commands'],
     [':clip', 'save a clip now'], [':len 30', 'clip length in seconds'], [':fps 30', 'frame rate'],
     [':res 720p', 'resolution (native, 720p, 1080p, 1600x900…)'], [':bitrate 8m', 'video bitrate'],
     [':preset veryfast', 'x264 preset'], [':audio on|off|192', 'desktop audio / its bitrate'],
-    [':hotkey', 'press a new combo'], [':monitor 1', 'which display'], [':mouse', 'show / hide the cursor'],
+    [':hotkey', 'press a new combo for saving clips'], [':openkey', 'press a new combo for opening flagra (:openkey off)'],
+    [':monitor 1', 'which display'], [':mouse', 'show / hide the cursor'],
     [':priority below', 'encoder priority'], [':dir D:\\Clips', 'clips folder (:dir reset)'],
     [':beep  :notify', 'toggle feedback on save'], [':ffmpeg PATH', 'ffmpeg.exe to use (:ffmpeg auto)'],
     [':rename  :delete  :copy', 'act on the selected clip'],
@@ -752,7 +835,16 @@ document.addEventListener('keydown', e => {
   const handled = () => { e.preventDefault(); return true; };
 
   if (helpOpen) {
-    if (k === 'Escape' || k === '?' || k === 'q' || k === 'Enter') { handled(); closeHelp(); }
+    const page = el.help.clientHeight - 60;
+    const scroll = {
+      j: 60, ArrowDown: 60, k: -60, ArrowUp: -60, ' ': page, PageDown: page, PageUp: -page,
+      d: page / 2, u: -page / 2, g: -Infinity, Home: -Infinity, G: Infinity, End: Infinity,
+    }[k];
+    if (scroll != null) {
+      handled();
+      if (!isFinite(scroll)) el.help.scrollTop = scroll > 0 ? el.help.scrollHeight : 0;
+      else el.help.scrollBy({ top: scroll });
+    } else if (k === 'Escape' || k === '?' || k === 'q' || k === 'Enter') { handled(); closeHelp(); }
     else if (k === ':') { handled(); openCommand(); }
     return;
   }
@@ -782,7 +874,7 @@ document.addEventListener('keydown', e => {
     case 'PageUp': handled(); move(-10); return;
     case 'Home': case 'g': handled(); move(1, true); return;
     case 'End': case 'G': handled(); move(-1, true); return;
-    case 'Escape': handled(); api.close(); return;
+    case 'Escape': handled(); if (fullscreen) toggleFullscreen(); else api.close(); return;
   }
 
   if (view === 'settings') {
@@ -825,6 +917,8 @@ el.mode.addEventListener('click', () => {
   else switchView();
 });
 el.video.addEventListener('click', togglePause);
+$('min').addEventListener('click', () => api.minimize());
+$('close').addEventListener('click', () => api.close());
 document.addEventListener('contextmenu', e => e.preventDefault());
 window.addEventListener('resize', setHints);
 
