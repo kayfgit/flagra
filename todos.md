@@ -14,3 +14,8 @@ done todos get erased shortly after.
 [x] - start with windows, so it records after a reboot without opening it
 [x] - any resolution other than native made ffmpeg fail to start (wrong scale_d3d11 option names); the window now shows ffmpeg's actual error
 [x] - check the installer's ffmpeg download on a pc that doesn't have ffmpeg yet (no download anymore: flagra ships its own 7 MB ffmpeg)
+[x] - Add microphone audio (along with a volume mixer)
+[x] - :q currently minimizes, add :q! To force quit
+[x] - X button should force quit, minimize button should close it but still be open on system tray
+[x] - change left and right arrow that skips -5/+5s to H and L
+[x] - the window takes a while to open (~1.5 seconds), anyway to make it open instantly? (:keepready / open instantly: ~50 ms, ~85 MB while closed; otherwise ~0.5 s, the first open after an install is slower)

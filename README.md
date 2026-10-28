@@ -4,7 +4,7 @@ ShadowPlay-style instant replay for PCs that can't run ShadowPlay (no NVENC: GT 
 Press a hotkey, get the last N seconds as an `.mp4`.
 
 - Lives in the tray; default hotkey **Alt+F10**, saves the last **20 s** to `Videos\flagra`.
-- Records the screen and desktop audio, kept in sync (measured within ±10 ms).
+- Records the screen, desktop audio and (if you want) your microphone, kept in sync (measured within ±10 ms).
 - The replay buffer lives in **RAM** (~25 MB at the default settings), so it doesn't write to disk constantly.
   The disk is only touched when you save a clip.
 - Saving a clip takes no extra CPU: the buffer is already encoded, so it's just copied into an `.mp4`.
@@ -70,10 +70,13 @@ flagra bundles: bump `BUILD` there to publish a new one. `ffmpeg_path` in the se
 The recorder runs headless in the tray (~30 MB). The window is a **separate process**
 (`flagra.exe --ui`) that only exists while it's open: closing it (Esc) ends the process and its
 WebView2, and recording carries on untouched. Open, it costs about 90 MB (WebView2 trimmed the same
-way as tradu, GPU off: that measured 50 MB lighter and no more CPU, even while playing clips).
+way as tradu, GPU off: that measured 50 MB lighter and no more CPU, even while playing clips). It
+opens in about half a second; `:keepready` (*open instantly*) instead keeps it hidden in the
+background after closing, so it opens in ~50 ms, for about 85 MB held while closed (and no CPU).
 
-Like tradu it has no Windows title bar: minimize and close sit at the top right, dragging the top or
-bottom bar moves it, and the edges resize it. `:move` and `:resize` do the same from the keyboard
+Like tradu it has no Windows title bar. Top right, `─` closes the window to the tray (recording carries
+on, like Esc and `:q`) and `✕` quits flagra entirely (like `:q!`). Dragging the top or bottom bar moves it,
+and the edges resize it. `:move` and `:resize` do the same from the keyboard
 (`h j k l`, Shift for fine steps, Ctrl for big ones, `↵` when done) and flagra opens there from then
 on; `:move reset` / `:resize reset` undo that. `:f` toggles fullscreen.
 
@@ -91,15 +94,20 @@ Everything is on the keyboard, in the same style as tradu:
 | `:` | command line | command line |
 | `?` / `esc` | help (`j k` scroll it) / close the window | help / close the window |
 
-While a clip plays: `space` pause, `← →` 5 s (Shift: 1 s), `, .` one frame, `m` mute, `esc` close.
+While a clip plays: `space` pause, `h l` 5 s (Shift: 1 s; `← →` too), `, .` one frame, `m` mute, `esc` close.
+
+The *desktop audio* and *microphone* rows in settings are a small mixer: each has a live level meter
+(red when it clips), `↵` turns it on or off and `h l` change its volume (5 %, Shift 1 %, up to 200 %).
+Both go into the clip's one audio track. Volumes and switching sources apply instantly, without
+restarting capture; while the microphone is off flagra doesn't open it at all.
 
 Settings change through commands, with a preview of what they'll do as you type:
-`:len 30`, `:fps 30`, `:res 720p`, `:bitrate 8m`, `:preset veryfast`, `:audio off` / `:audio 192`,
+`:len 30`, `:fps 30`, `:res 720p`, `:bitrate 8m`, `:preset veryfast`, `:desktop 80` / `:desktop off`, `:mic on` / `:mic 120`, `:abitrate 192`,
 `:hotkey` / `:openkey` (then press the combo), `:monitor 1`, `:mouse`, `:priority below`, `:dir D:\Clips`,
 `:beep`, `:notify`, `:ffmpeg PATH`. Plus `:clip`, `:folder`, `:log`, `:ini`, `:start` / `:stop`
-(the background recorder), `:move`, `:resize`, `:f`, `:min` and `:help`.
+(the background recorder), `:move`, `:resize`, `:f`, `:min`, `:keepready`, `:q` / `:q!` and `:help`.
 
-Only settings that change the encoding (fps, resolution, bitrate, preset, audio, monitor, cursor,
+Only settings that change the encoding (fps, resolution, bitrate, preset, having audio at all, monitor, cursor,
 priority, ffmpeg) restart capture, which starts the replay buffer over. The rest (hotkey, clip length,
 folder, beep, notification) apply instantly without losing what's buffered.
 
@@ -127,6 +135,8 @@ The window edits this file for you (keeping its comments). Editing it by hand wo
 | `video_bitrate_kbps` | `10000` | Quality and file size. Barely affects CPU. |
 | `preset` | `ultrafast` | x264 preset. Each step slower = better quality per bit, noticeably more CPU. |
 | `audio` | `true` | Desktop audio (whatever plays on the default output device; follows device switches). |
+| `mic` | `false` | Your default microphone, mixed into the same track. Off = never opened. |
+| `desktop_volume` / `mic_volume` | `100` | Percent, 0-200. Applied live. |
 | `audio_bitrate_kbps` | `160` | |
 | `monitor` | `0` | Which display to record. |
 | `draw_mouse` | `true` | |
@@ -134,6 +144,7 @@ The window edits this file for you (keeping its comments). Editing it by hand wo
 | `output_dir` | *(Videos\flagra)* | |
 | `ffmpeg_path` | *(auto)* | |
 | `beep` / `notify` | `true` | Beep (audible in fullscreen games) and a tray notification on save. |
+| `keep_window_ready` | `false` | Keep the window hidden in the background after closing, so it opens instantly (~85 MB while closed). |
 | `start_with_windows` | `true` | Starts flagra when you log in (a per-user Run entry; Task Manager's Startup apps switch still applies). |
 
 ### What it costs
@@ -180,7 +191,7 @@ hotkey → copy the last N s of the ring → remux to .mp4 (no re-encode)
 - Clips start on a keyframe (one per second), so a clip can be up to ~1 s longer than `clip_seconds`.
 - Exclusive-fullscreen games that block Desktop Duplication show up black. Borderless/windowed always works,
   and most modern "fullscreen" modes do too.
-- Records one monitor; no microphone yet.
+- Records one monitor, and the default microphone (no device choice yet).
 
 ## License
 

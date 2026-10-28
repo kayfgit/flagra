@@ -43,6 +43,8 @@ struct Shared {
     pid: AtomicU32,
     /// Job object that kills ffmpeg if flagra dies, so it never lingers.
     job: isize,
+    /// Which audio sources are on and how loud, applied live; and their levels.
+    controls: Arc<audio::Controls>,
 }
 
 pub struct Recorder {
@@ -54,6 +56,7 @@ impl Recorder {
     pub fn start(dir: PathBuf, cfg: Arc<Mutex<Config>>) -> Recorder {
         let job = unsafe { create_kill_job() };
         let keep = Duration::from_secs(cfg.lock().unwrap().clip_seconds as u64 + SLACK_SECS);
+        let controls = Arc::new(audio::Controls::new(&cfg.lock().unwrap()));
         let shared = Arc::new(Shared {
             dir,
             cfg,
@@ -62,10 +65,21 @@ impl Recorder {
             restart: AtomicBool::new(false),
             pid: AtomicU32::new(0),
             job,
+            controls,
         });
         let s = shared.clone();
         let thread = thread::Builder::new().name("supervisor".into()).spawn(move || supervise(&s)).ok();
         Recorder { shared, thread: Mutex::new(thread) }
+    }
+
+    /// Applies audio source switches and volumes without restarting capture.
+    pub fn apply_audio(&self, cfg: &Config) {
+        self.shared.controls.apply(cfg);
+    }
+
+    /// Peak level of desktop audio and microphone since the last call (1.0 = full scale).
+    pub fn levels(&self) -> (f32, f32) {
+        self.shared.controls.take_peaks()
     }
 
     /// ffmpeg's PID (0 while capture is down) and how much is buffered.
@@ -197,7 +211,7 @@ fn run_session(s: &Shared, cfg: &Config) -> Result<bool, String> {
     log!("capture: starting {} {}", ff.display(), args.join(" "));
     let mut child = Command::new(&ff)
         .args(&args)
-        .stdin(if cfg.audio { Stdio::piped() } else { Stdio::null() })
+        .stdin(if has_audio(cfg) { Stdio::piped() } else { Stdio::null() })
         .stdout(Stdio::piped())
         .stderr(errlog)
         .creation_flags(CREATE_NO_WINDOW | cfg.priority.creation_flag())
@@ -231,7 +245,8 @@ fn run_session(s: &Shared, cfg: &Config) -> Result<bool, String> {
                 }
             });
             let audio_stop = &audio_stop;
-            scope.spawn(move || audio::run(audio_stop, t0_qpc, tx));
+            let controls = &*s.controls;
+            scope.spawn(move || audio::run(audio_stop, t0_qpc, tx, controls));
         }
 
         let result = loop {
@@ -258,9 +273,14 @@ fn run_session(s: &Shared, cfg: &Config) -> Result<bool, String> {
     })
 }
 
+/// Whether the recording has an audio track (desktop audio, microphone or both).
+fn has_audio(cfg: &Config) -> bool {
+    cfg.audio || cfg.mic
+}
+
 fn ffmpeg_args(cfg: &Config, t0_rtc_us: i64) -> Vec<String> {
     let mut a: Vec<String> = ["-hide_banner", "-loglevel", "warning", "-nostats"].map(String::from).to_vec();
-    if cfg.audio {
+    if has_audio(cfg) {
         // Raw PCM needs no probing; without these ffmpeg reads ~5 s of audio
         // before it even starts capturing video.
         a.extend(
@@ -310,7 +330,7 @@ fn ffmpeg_args(cfg: &Config, t0_rtc_us: i64) -> Vec<String> {
         "-g".into(), (cfg.fps * 2).to_string(),
         "-force_key_frames".into(), "expr:gte(t,n_forced*1)".into(),
     ]);
-    if cfg.audio {
+    if has_audio(cfg) {
         a.extend(["-map".into(), "0:a".into(), "-c:a".into(), "aac".into(), "-b:a".into(), format!("{}k", cfg.audio_bitrate_kbps)]);
     }
     a.extend(["-f", "mpegts", "-muxdelay", "0", "-muxpreload", "0", "pipe:1"].map(String::from));

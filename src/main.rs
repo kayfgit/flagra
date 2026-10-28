@@ -41,6 +41,8 @@ const WM_NOTE: u32 = WM_APP + 4;
 pub const WM_REMOTE_RELOAD: u32 = WM_APP + 5;
 /// From the GUI: returns (buffered ms << 32) | ffmpeg pid.
 pub const WM_STATUS: u32 = WM_APP + 6;
+/// From the GUI: returns (desktop peak << 16) | mic peak since the last ask; 16384 = full scale.
+pub const WM_LEVELS: u32 = WM_APP + 7;
 const HOTKEY_ID: i32 = 1;
 const OPEN_HOTKEY_ID: i32 = 2;
 
@@ -102,14 +104,14 @@ fn main() {
     // The GUI is a separate process (this same exe with --ui) that only exists
     // while its window is open, so the recorder never carries WebView2's memory.
     if arg.as_deref() == Some("--ui") {
-        ui::run(dir);
+        ui::run(dir, std::env::args().any(|a| a == "--hidden"));
         return;
     }
     unsafe {
         let _mutex = CreateMutexW(None, false, w!("Local\\FlagraSingleInstance"));
         if GetLastError() == ERROR_ALREADY_EXISTS {
             // Launching flagra again (Start menu, desktop shortcut) opens the GUI.
-            ui::run(dir);
+            ui::run(dir, false);
             return;
         }
         std::mem::forget(_mutex);
@@ -123,6 +125,9 @@ fn main() {
     }
     log!("flagra started: {:?}", cfg);
     autostart::sync(cfg.start_with_windows);
+    if cfg.keep_window_ready {
+        start_ui(true);
+    }
     let cfg = Arc::new(Mutex::new(cfg));
     let rec = Recorder::start(dir.clone(), cfg.clone());
 
@@ -182,6 +187,11 @@ unsafe extern "system" fn wndproc(h: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
         WM_REMOTE_CLIP => save_clip(),
         WM_REMOTE_QUIT => PostQuitMessage(0),
         WM_REMOTE_RELOAD => reload(wp.0 != 0),
+        WM_LEVELS => {
+            let (desktop, mic) = app().rec.levels();
+            let q = |p: f32| (p.clamp(0.0, 3.99) * 16384.0) as isize;
+            return LRESULT((q(desktop) << 16) | q(mic));
+        }
         WM_STATUS => {
             let (pid, buffered) = app().rec.status();
             return LRESULT(((buffered.as_millis().min(u32::MAX as u128) as isize) << 32) | pid as isize);
@@ -260,13 +270,20 @@ fn reload(quiet: bool) {
     }
     log!("settings reloaded: {:?}", cfg);
     let old = std::mem::replace(&mut *a.cfg.lock().unwrap(), cfg.clone());
+    a.rec.apply_audio(&cfg);
     if old.capture_differs(&cfg) {
         a.rec.restart();
     } else if old.clip_seconds != cfg.clip_seconds {
         a.rec.set_clip_seconds(cfg.clip_seconds);
     }
+    if cfg.keep_window_ready && !old.keep_window_ready {
+        start_ui(true);
+    }
     if old.start_with_windows != cfg.start_with_windows {
         autostart::sync(cfg.start_with_windows);
+    if cfg.keep_window_ready {
+        start_ui(true);
+    }
     }
     if old.hotkey != cfg.hotkey || old.open_hotkey != cfg.open_hotkey {
         register_hotkeys();
@@ -287,10 +304,21 @@ fn open_ui() {
     // The new process (or the open window it hands over to) has to come to
     // the front; Windows only lets that happen if we pass on our right to.
     unsafe { let _ = AllowSetForegroundWindow(ASFW_ANY); }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Err(e) = std::process::Command::new(exe).arg("--ui").spawn() {
-            log!("cannot open the window: {}", e);
-        }
+    start_ui(false);
+}
+
+/// Starts lagra.exe --ui; hidden starts it in the background (keep_window_ready).
+/// If the window process is already running, it shows itself instead (or, for
+/// a hidden start, does nothing).
+fn start_ui(hidden: bool) {
+    let Ok(exe) = std::env::current_exe() else { return };
+    let mut cmd = std::process::Command::new(exe);
+    cmd.arg("--ui");
+    if hidden {
+        cmd.arg("--hidden");
+    }
+    if let Err(e) = cmd.spawn() {
+        log!("cannot open the window: {}", e);
     }
 }
 

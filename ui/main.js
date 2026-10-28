@@ -18,6 +18,7 @@ function tauriApi() {
   return {
     ready: () => invoke('ready'),
     close: () => invoke('close'),
+    quit: () => invoke('quit'),
     minimize: () => invoke('minimize'),
     moveWindow: (dx, dy) => invoke('move_window', { dx, dy }),
     resizeWindow: (dw, dh) => invoke('resize_window', { dw, dh }),
@@ -26,6 +27,7 @@ function tauriApi() {
     fullscreen: () => invoke('toggle_fullscreen'),
     load: () => invoke('load'),
     status: () => invoke('status'),
+    levels: () => invoke('levels'),
     set: (key, value) => invoke('set_setting', { key, value: String(value) }),
     clips: () => invoke('list_clips'),
     saveClip: () => invoke('save_clip'),
@@ -52,18 +54,19 @@ function browserApi() {
     fake('2026-10-26_23-02-11', 86400 + 3000, 20.5), fake('2026-10-20_18-40-55', 7 * 86400, 31.1)];
   let config = {
     hotkey: 'Alt+F10', open_hotkey: 'Alt+F9', clip_seconds: 20, fps: 60, resolution: 'native', video_bitrate_kbps: 10000,
-    preset: 'ultrafast', audio: true, audio_bitrate_kbps: 160, monitor: 0, draw_mouse: true,
+    preset: 'ultrafast', audio: true, desktop_volume: 100, mic: false, mic_volume: 100, audio_bitrate_kbps: 160, monitor: 0, draw_mouse: true,
     priority: 'below_normal', output_dir: 'C:\\Users\\you\\Videos\\flagra', output_dir_custom: false,
-    ffmpeg_path: null, beep: true, notify: true, start_with_windows: true,
+    ffmpeg_path: null, beep: true, notify: true, start_with_windows: true, keep_window_ready: false,
   };
   const capture = new Set(['fps', 'resolution', 'video_bitrate_kbps', 'preset', 'audio', 'audio_bitrate_kbps',
     'monitor', 'draw_mouse', 'priority', 'ffmpeg_path']);
   return {
-    ready: async () => {}, close: async () => {}, minimize: async () => {},
+    ready: async () => {}, close: async () => {}, quit: async () => {}, minimize: async () => {},
     moveWindow: async () => {}, resizeWindow: async () => {}, savePlacement: async () => {}, resetPlacement: async () => {},
     fullscreen: async () => !document.fullscreenElement,
     load: async () => ({ config, warnings: [], cpus: 6 }),
     status: async () => ({ running: true, recording: true, buffered: 22.8, cpu: 9 + Math.random() * 3, mem_mb: 113 }),
+    levels: async () => [Math.random() * 0.6, config.mic ? Math.random() * 1.1 : 0],
     set: async (key, value) => {
       const bool = typeof config[key] === 'boolean';
       config = { ...config, [key]: bool ? value === 'true' : /^\d+$/.test(value) ? Number(value) : value };
@@ -100,7 +103,7 @@ let deleteArmed = 0;             // time of the first d of dd
 let awaitingClip = 0;            // time we asked the recorder for a clip
 let lastStatus = null;
 
-const CAPTURE_KEYS = new Set(['fps', 'resolution', 'video_bitrate_kbps', 'preset', 'audio',
+const CAPTURE_KEYS = new Set(['fps', 'resolution', 'video_bitrate_kbps', 'preset',
   'audio_bitrate_kbps', 'monitor', 'draw_mouse', 'priority', 'ffmpeg_path']);
 const PRESETS = ['ultrafast', 'superfast', 'veryfast', 'faster', 'fast', 'medium'];
 const PRIORITIES = { idle: 'idle', below: 'below_normal', below_normal: 'below_normal', normal: 'normal',
@@ -174,9 +177,18 @@ const SETTINGS = [
     },
   },
   { key: 'preset', label: 'x264 preset', cmd: 'preset', value: c => c.preset },
+  // The mixer: both sources go into one track. h l change the volume live.
   {
-    key: 'audio', label: 'desktop audio', cmd: 'audio', bool: true,
-    value: c => (c.audio ? ['on', ` · ${c.audio_bitrate_kbps} kbps`] : 'off'),
+    key: 'audio', label: 'desktop audio', cmd: 'desktop', bool: true, volume: 'desktop_volume', meter: 'desktop',
+    value: c => (c.audio ? ['on', ` · ${c.desktop_volume}%`] : 'off'),
+  },
+  {
+    key: 'mic', label: 'microphone', cmd: 'mic', bool: true, volume: 'mic_volume', meter: 'mic',
+    value: c => (c.mic ? ['on', ` · ${c.mic_volume}%`] : ['off', ' · ↵ to record your voice too']),
+  },
+  {
+    key: 'audio_bitrate_kbps', label: 'audio bitrate', cmd: 'abitrate',
+    value: c => [`${c.audio_bitrate_kbps} kbps`, c.audio || c.mic ? ' · AAC' : ' · no audio is recorded'],
   },
   { key: 'monitor', label: 'monitor', cmd: 'monitor', value: c => String(c.monitor) },
   { key: 'draw_mouse', label: 'mouse cursor', cmd: 'mouse', bool: true, value: c => (c.draw_mouse ? 'shown' : 'hidden') },
@@ -190,6 +202,12 @@ const SETTINGS = [
   {
     key: 'start_with_windows', label: 'start with Windows', cmd: 'autostart', bool: true,
     value: c => (c.start_with_windows ? ['on', ' · records from the moment you log in'] : 'off'),
+  },
+  {
+    key: 'keep_window_ready', label: 'open instantly', cmd: 'keepready', bool: true,
+    value: c => (c.keep_window_ready
+      ? ['on', ' · kept ready in the background (WebView2 in low-memory mode)']
+      : ['off', ' · opens in about half a second, uses no memory while closed']),
   },
   {
     key: 'ffmpeg_path', label: 'ffmpeg', cmd: 'ffmpeg',
@@ -247,8 +265,12 @@ function settingRows() {
     const [main, note] = Array.isArray(v) ? v : [v, ''];
     const li = h('li', 'row',
       h('span', 'label', s.label),
-      h('span', 'value', main, note && h('span', 'note', note)),
-      h('span', 'cmd', s.bool ? `↵ toggles · :${s.cmd}` : s.key.endsWith('hotkey') ? '↵ press a new combo' : `:${s.cmd}`));
+      h('span', 'value', main, note && h('span', s.meter ? 'note vol' : 'note', note),
+        s.meter && config[s.key] && h('span', 'meter', h('span'))),
+      h('span', 'cmd', s.volume ? `↵ on/off · h l volume · :${s.cmd}`
+        : s.bool ? `↵ toggles · :${s.cmd}` : s.key.endsWith('hotkey') ? '↵ press a new combo' : `:${s.cmd}`));
+    const meter = li.querySelector('.meter');
+    if (meter) meter.dataset.meter = s.meter;
     li.dataset.i = i;
     return li;
   });
@@ -283,8 +305,8 @@ function setMode() {
 const HINTS = {
   clips: [['↵', 'play'], ['y', 'copy'], ['r', 'rename'], ['dd', 'delete'], ['f', 'folder'], ['c', 'clip now'],
     ['tab', 'settings'], [':', 'command'], ['?', 'help']],
-  player: [['space', 'pause'], ['← →', '5 s'], [', .', 'frame'], ['y', 'copy'], ['o', 'player app'], ['esc', 'close']],
-  settings: [['↵', 'change'], ['tab', 'clips'], [':', 'command'], ['?', 'help'], ['esc', 'close']],
+  player: [['space', 'pause'], ['h l', '5 s'], [', .', 'frame'], ['y', 'copy'], ['o', 'player app'], ['esc', 'close']],
+  settings: [['↵', 'change'], ['h l', 'volume'], ['tab', 'clips'], [':', 'command'], ['?', 'help'], ['esc', 'close']],
   command: [['↵', 'run'], ['tab', 'complete'], ['esc', 'cancel']],
   hotkey: [['press', 'the new combo'], ['esc', 'cancel']],
   help: [['j k', 'scroll'], ['g G', 'top / bottom'], ['esc', 'back']],
@@ -455,7 +477,8 @@ async function applySetting(key, value) {
   try {
     const r = await api.set(key, value);
     config = r.config;
-    const label = SETTINGS.find(s => s.key === key)?.label ?? key;
+    const s = SETTINGS.find(s => s.key === key || s.volume === key);
+    const label = !s ? key : s.volume === key ? `${s.label} volume ${value}%` : s.label;
     say(`${label} saved${r.restarted ? ' · capture restarted' : ''}`, 'done');
     render();
     refreshStatus();
@@ -463,6 +486,39 @@ async function applySetting(key, value) {
     say(errText(err), 'error');
   }
 }
+
+// h l on a mixer row: change its volume now, save it once the keys stop.
+let volumeTimer = 0;
+function adjustVolume(delta) {
+  const s = SETTINGS[sel.settings];
+  if (!s.volume) return;
+  const v = Math.max(0, Math.min(200, config[s.volume] + delta));
+  if (v === config[s.volume]) return;
+  config = { ...config, [s.volume]: v };
+  render();
+  say(`${s.label} volume ${v}%`);
+  clearTimeout(volumeTimer);
+  volumeTimer = setTimeout(() => applySetting(s.volume, v), 300);
+}
+
+// Level meters on the mixer rows, polled only while settings are on screen.
+const meterLevel = { desktop: 0, mic: 0 };
+async function refreshMeters() {
+  if (view !== 'settings' || helpOpen || document.hidden || !el.list.querySelector('.meter')) return;
+  let levels;
+  try { levels = await api.levels(); } catch { return; }
+  if (!levels) return;
+  ['desktop', 'mic'].forEach((k, i) => {
+    // Rise at once, fall back gently.
+    meterLevel[k] = Math.max(levels[i], meterLevel[k] * 0.6);
+    const meter = el.list.querySelector(`.meter[data-meter="${k}"]`);
+    if (!meter) return;
+    const db = meterLevel[k] > 0 ? 20 * Math.log10(meterLevel[k]) : -90;
+    meter.firstChild.style.width = `${Math.max(0, Math.min(1, (db + 60) / 60)) * 100}%`;
+    meter.classList.toggle('clip', levels[i] >= 1);
+  });
+}
+setInterval(refreshMeters, 125);
 
 function activateSetting() {
   const s = SETTINGS[sel.settings];
@@ -578,7 +634,11 @@ function attempt(fn) {
 }
 
 function change(key, value, label) {
-  const effect = CAPTURE_KEYS.has(key) ? 'restarts capture, so the buffer starts over' : 'applies right away';
+  // Sources switch live; only adding or removing the audio track altogether restarts.
+  const audioTrack = c => c.audio || c.mic;
+  const restarts = CAPTURE_KEYS.has(key)
+    || ((key === 'audio' || key === 'mic') && audioTrack(config) !== audioTrack({ ...config, [key]: value }));
+  const effect = restarts ? 'restarts capture, so the buffer starts over' : 'applies right away';
   return { label: `${label} · ${effect}`, run: () => applySetting(key, value) };
 }
 
@@ -604,6 +664,21 @@ function kbps(s) {
   n = Math.round(n);
   if (n < 100 || n > 200000) throw 'bitrate: from 0.1m to 200m';
   return n;
+}
+
+/** :desktop / :mic: on, off, nothing (toggle) or a volume like 80 / 120%. */
+function volumeCommand(key, volumeKey, label, arg) {
+  return attempt(() => {
+    if (/^\d+%?$/.test(arg ?? '')) {
+      const n = int(arg.replace(/%$/, ''), 0, 200, 'volume (percent)');
+      return {
+        label: `${label} volume ${config[volumeKey]}% → ${n}%${config[key] ? '' : `, and turn ${label} on`} · applies right away`,
+        run: async () => { await applySetting(volumeKey, n); if (!config[key]) await applySetting(key, true); },
+      };
+    }
+    const v = bool(arg, config[key]);
+    return change(key, v, `${label} ${config[key] ? 'on' : 'off'} → ${v ? 'on' : 'off'}`);
+  });
 }
 
 function onOff(key, label, show) {
@@ -639,15 +714,13 @@ const COMMANDS = {
     if (!PRESETS.includes(p)) throw PRESETS.join(', ');
     return change('preset', p, `preset ${config.preset} → ${p}`);
   })),
-  audio: arg => attempt(() => {
-    if (/^\d+k?$/i.test(arg ?? '')) {
-      const n = int(arg.replace(/k$/i, ''), 32, 512, 'audio bitrate');
-      return { label: `desktop audio on at ${n} kbps · restarts capture, so the buffer starts over`,
-        run: async () => { await applySetting('audio_bitrate_kbps', n); if (!config.audio) await applySetting('audio', true); } };
-    }
-    const v = bool(arg, config.audio);
-    return change('audio', v, `desktop audio ${config.audio ? 'on' : 'off'} → ${v ? 'on' : 'off'}`);
-  }),
+  desktop: arg => volumeCommand('audio', 'desktop_volume', 'desktop audio', arg),
+  audio: arg => volumeCommand('audio', 'desktop_volume', 'desktop audio', arg),
+  mic: arg => volumeCommand('mic', 'mic_volume', 'microphone', arg),
+  abitrate: arg => (!arg ? { label: `audio bitrate in kbps (now ${config.audio_bitrate_kbps})` } : attempt(() => {
+    const n = int(arg.replace(/k$/i, ''), 32, 512, 'audio bitrate');
+    return change('audio_bitrate_kbps', n, `audio bitrate ${config.audio_bitrate_kbps} → ${n} kbps`);
+  })),
   monitor: arg => (!arg ? { label: `which display to record, 0 = first (now ${config.monitor})` } : attempt(() => {
     const n = int(arg, 0, 16, 'monitor');
     return change('monitor', n, `monitor ${config.monitor} → ${n}`);
@@ -656,6 +729,7 @@ const COMMANDS = {
   beep: onOff('beep', 'beep on save', v => (v ? 'on' : 'off')),
   notify: onOff('notify', 'notification on save', v => (v ? 'on' : 'off')),
   autostart: onOff('start_with_windows', 'start with Windows', v => (v ? 'on' : 'off')),
+  keepready: onOff('keep_window_ready', 'open instantly', v => (v ? 'on' : 'off')),
   priority: arg => (!arg ? { label: `idle, below, normal or above (now ${priorityLabel(config.priority)})` } : attempt(() => {
     const p = PRIORITIES[arg.toLowerCase()];
     if (!p) throw 'idle, below, normal or above';
@@ -705,7 +779,8 @@ const COMMANDS = {
   settings: () => ({ label: 'show settings', run: () => switchView('settings') }),
   clips: () => ({ label: 'show clips', run: () => switchView('clips') }),
   help: () => ({ label: 'list the keys and commands', run: showHelp }),
-  q: () => ({ label: 'close this window (recording continues)', run: () => api.close() }),
+  q: () => ({ label: 'close this window (recording continues in the tray)', run: () => api.close() }),
+  'q!': () => ({ label: 'quit flagra: stops recording until you open it again', run: quitAll }),
 };
 
 function parseCommand(text) {
@@ -763,6 +838,12 @@ function completeCommand() {
 
 el.input.addEventListener('input', previewCommand);
 
+/** Stops the recorder too, then closes the window. */
+async function quitAll() {
+  try { await api.stop(); } catch {}
+  api.quit();
+}
+
 async function startRecorder() {
   try {
     await api.start();
@@ -782,7 +863,7 @@ function showHelp() {
     ['d d', 'move to the Recycle Bin'], ['f', 'show in Explorer'], ['o', 'open in your video player'],
     ['c', `save the last ${config?.clip_seconds ?? 20} s now (same as ${config?.hotkey ?? 'the hotkey'})`],
     ['Player'],
-    ['space', 'pause / play'], ['← →', '5 s back / forward (Shift: 1 s)'], [', .', 'one frame back / forward'],
+    ['space', 'pause / play'], ['h l  ← →', '5 s back / forward (Shift: 1 s)'], [', .', 'one frame back / forward'],
     ['m', 'mute'], ['esc', 'close the player'],
     ['Anywhere'],
     ['tab', 'clips ⇄ settings'], [':', 'command line'], ['esc', 'close the window (recording continues)'],
@@ -795,14 +876,18 @@ function showHelp() {
     ['Commands'],
     [':clip', 'save a clip now'], [':len 30', 'clip length in seconds'], [':fps 30', 'frame rate'],
     [':res 720p', 'resolution (native, 720p, 1080p, 1600x900…)'], [':bitrate 8m', 'video bitrate'],
-    [':preset veryfast', 'x264 preset'], [':audio on|off|192', 'desktop audio / its bitrate'],
+    [':preset veryfast', 'x264 preset'],
+    [':desktop on|off|80', 'desktop audio, or its volume in % (h l on its settings row)'],
+    [':mic on|off|120', 'your microphone, mixed in, or its volume in %'], [':abitrate 192', 'audio bitrate'],
     [':hotkey', 'press a new combo for saving clips'], [':openkey', 'press a new combo for opening flagra (:openkey off)'],
     [':monitor 1', 'which display'], [':mouse', 'show / hide the cursor'],
     [':priority below', 'encoder priority'], [':dir D:\\Clips', 'clips folder (:dir reset)'],
-    [':beep  :notify', 'toggle feedback on save'], [':autostart', 'toggle starting with Windows'], [':ffmpeg PATH', 'ffmpeg.exe to use (:ffmpeg auto)'],
+    [':beep  :notify', 'toggle feedback on save'], [':autostart', 'toggle starting with Windows'],
+    [':keepready', 'keep the window ready so it opens instantly (uses memory while closed)'], [':ffmpeg PATH', 'ffmpeg.exe to use (:ffmpeg auto)'],
     [':rename  :delete  :copy', 'act on the selected clip'],
     [':folder  :log  :ini', 'open the clips folder, the log, the settings file'],
-    [':start  :stop', 'start / quit the background recorder'], [':q', 'close this window'],
+    [':start  :stop', 'start / quit the background recorder'], [':q', 'close this window (recording continues)'],
+    [':q!', 'quit flagra entirely, like the ✕ button'],
   ];
   el.help.replaceChildren(...rows.flatMap(r => (r.length === 1
     ? [h('div', 'head', r[0])]
@@ -863,8 +948,8 @@ document.addEventListener('keydown', e => {
     const frame = 1 / 60;
     switch (k) {
       case ' ': handled(); togglePause(); return;
-      case 'ArrowLeft': handled(); seek(e.shiftKey ? -1 : -5); return;
-      case 'ArrowRight': handled(); seek(e.shiftKey ? 1 : 5); return;
+      case 'h': case 'H': case 'ArrowLeft': handled(); seek(e.shiftKey ? -1 : -5); return;
+      case 'l': case 'L': case 'ArrowRight': handled(); seek(e.shiftKey ? 1 : 5); return;
       case ',': handled(); v.pause(); seek(-frame); return;
       case '.': handled(); v.pause(); seek(frame); return;
       case 'm': handled(); v.muted = !v.muted; say(v.muted ? 'muted' : 'sound on'); return;
@@ -884,6 +969,8 @@ document.addEventListener('keydown', e => {
 
   if (view === 'settings') {
     if (k === 'Enter' || k === ' ') { handled(); activateSetting(); }
+    else if (k === 'h' || k === 'H' || k === 'ArrowLeft') { handled(); adjustVolume(e.shiftKey ? -1 : -5); }
+    else if (k === 'l' || k === 'L' || k === 'ArrowRight') { handled(); adjustVolume(e.shiftKey ? 1 : 5); }
     return;
   }
 
@@ -922,8 +1009,9 @@ el.mode.addEventListener('click', () => {
   else switchView();
 });
 el.video.addEventListener('click', togglePause);
-$('min').addEventListener('click', () => api.minimize());
-$('close').addEventListener('click', () => api.close());
+// ─ closes the window and keeps recording in the tray; ✕ quits flagra entirely.
+$('min').addEventListener('click', () => api.close());
+$('close').addEventListener('click', quitAll);
 document.addEventListener('contextmenu', e => e.preventDefault());
 window.addEventListener('resize', setHints);
 
@@ -936,7 +1024,19 @@ function tick() {
 }
 tick.n = 0;
 
-document.addEventListener('visibilitychange', () => { if (!document.hidden) { refreshStatus(); refreshClips(); } });
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    // Kept ready in the background: come back to a clean window, not a playing clip.
+    stopPlayer();
+    if (commandMode) closeCommand();
+    if (hotkeyMode) exitHotkeyMode();
+    if (windowMode) exitWindowMode();
+    if (helpOpen) closeHelp();
+  } else {
+    refreshStatus();
+    refreshClips();
+  }
+});
 window.addEventListener('focus', () => refreshClips());
 
 (async () => {

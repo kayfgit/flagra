@@ -147,6 +147,21 @@ body.settings .row { grid-template-columns: 18ch minmax(0, 1fr) auto; }
 .row .value { color: var(--text); }
 .row .value .note { color: var(--muted); }
 .row .cmd { color: var(--dim); }
+/* Level meter on the mixer rows (desktop audio, microphone), lined up whatever the volume. */
+.row .value .vol { display: inline-block; min-width: 8ch; white-space: pre; }
+.meter {
+  display: inline-block;
+  width: 120px;
+  height: 6px;
+  margin-left: 14px;
+  vertical-align: middle;
+  background: var(--rule);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.meter > span { display: block; width: 0; height: 100%; background: var(--amber); transition: width .1s linear; }
+.meter.clip > span { background: var(--error); }
+
 .row.sel .label { color: var(--label); }
 .row.sel .value { color: var(--amber); }
 

@@ -15,7 +15,11 @@ use std::time::{Instant, UNIX_EPOCH};
 
 use serde::Serialize;
 use serde_json::{json, Value};
-use tauri::{AppHandle, LogicalSize, Manager, PhysicalPosition, State, WebviewWindow};
+use tauri::{AppHandle, LogicalSize, Manager, PhysicalPosition, State, WebviewWindow, WindowEvent};
+use webview2_com::Microsoft::Web::WebView2::Win32::{
+    ICoreWebView2_19, COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW, COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL,
+};
+use windows_core62::Interface;
 use windows::core::{BOOL, PCWSTR};
 use windows::Win32::Foundation::{CloseHandle, GlobalFree, FILETIME, HANDLE, HWND, LPARAM, POINT, WPARAM};
 use windows::Win32::System::DataExchange::{CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData};
@@ -34,15 +38,15 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use crate::config::{self, Config, Priority};
-use crate::{hotkey, recorder, util::wide, CLASS, WM_REMOTE_CLIP, WM_REMOTE_QUIT, WM_REMOTE_RELOAD, WM_STATUS};
+use crate::{hotkey, recorder, util::wide, CLASS, WM_LEVELS, WM_REMOTE_CLIP, WM_REMOTE_QUIT, WM_REMOTE_RELOAD, WM_STATUS};
 
 const CF_HDROP: u32 = 15;
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// Settings the GUI may change, in the order it shows them.
 const KEYS: &[&str] = &[
-    "hotkey", "open_hotkey", "clip_seconds", "fps", "resolution", "video_bitrate_kbps", "preset", "audio",
-    "audio_bitrate_kbps", "monitor", "draw_mouse", "priority", "output_dir", "ffmpeg_path", "beep", "notify", "start_with_windows",
+    "hotkey", "open_hotkey", "clip_seconds", "fps", "resolution", "video_bitrate_kbps", "preset", "audio", "desktop_volume", "mic", "mic_volume",
+    "audio_bitrate_kbps", "monitor", "draw_mouse", "priority", "output_dir", "ffmpeg_path", "beep", "notify", "start_with_windows", "keep_window_ready",
 ];
 
 struct CpuSample {
@@ -59,29 +63,54 @@ struct UiState {
     durations: Mutex<HashMap<PathBuf, (u64, Option<f64>)>>,
 }
 
-pub fn run(dir: PathBuf) {
+/// hidden: started by the recorder to have the window ready (keep_window_ready),
+/// so don't show it yet.
+pub fn run(dir: PathBuf, hidden: bool) {
     let cfg_path = dir.join("flagra.ini");
     tauri::Builder::default()
-        // Opening flagra while the window is already up just focuses it.
-        .plugin(tauri_plugin_single_instance::init(|app, _, _| focus(app)))
+        // Opening flagra while the window is already up (or kept ready) shows it.
+        .plugin(tauri_plugin_single_instance::init(|app, args, _| {
+            if !args.iter().any(|a| a == "--hidden") {
+                focus(app);
+            }
+        }))
         .manage(UiState {
             dir,
             cfg_path,
             cpu: Mutex::new(None),
             durations: Mutex::new(HashMap::new()),
         })
-        .setup(|app| {
+        .setup(move |app| {
             let state = app.state::<UiState>();
             let cfg = config::load(&state.cfg_path).0;
             allow_clips_dir(app.handle(), &cfg);
             if let Some(window) = app.get_webview_window("main") {
                 place(&window, &cfg);
+                if hidden {
+                    set_low_memory(&window, true);
+                } else {
+                    // Show it right away, in the page's own background colour, rather
+                    // than waiting for WebView2 to start and the page to load.
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+                let w = window.clone();
+                window.on_window_event(move |event| {
+                    if let WindowEvent::CloseRequested { api, .. } = event {
+                        if keep_ready(&w) {
+                            api.prevent_close();
+                            hide(&w);
+                        }
+                    }
+                });
             }
+            let handle = app.handle().clone();
+            std::thread::spawn(move || exit_with_recorder(handle));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            ready, close, minimize, move_window, resize_window, save_placement, reset_placement, toggle_fullscreen,
-            load, status, set_setting, list_clips, save_clip, delete_clip, rename_clip, copy_clip, reveal, play,
+            ready, close, quit, minimize, move_window, resize_window, save_placement, reset_placement, toggle_fullscreen,
+            load, status, levels, set_setting, list_clips, save_clip, delete_clip, rename_clip, copy_clip, reveal, play,
             open_special, start_recorder, stop_recorder,
         ])
         .run(tauri::generate_context!())
@@ -90,9 +119,45 @@ pub fn run(dir: PathBuf) {
 
 fn focus(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
+        set_low_memory(&w, false);
         let _ = w.unminimize();
         let _ = w.show();
         let _ = w.set_focus();
+    }
+}
+
+/// Whether closing should only hide the window (keep_window_ready), read fresh
+/// so turning the setting off takes effect at the next close.
+fn keep_ready(window: &WebviewWindow) -> bool {
+    config::load(&window.state::<UiState>().cfg_path).0.keep_window_ready
+}
+
+fn hide(window: &WebviewWindow) {
+    let _ = window.hide();
+    set_low_memory(window, true);
+}
+
+/// While hidden, WebView2 is asked to give back as much memory as it can.
+fn set_low_memory(window: &WebviewWindow, low: bool) {
+    let _ = window.with_webview(move |webview| unsafe {
+        let level = if low { COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW } else { COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL };
+        if let Ok(core) = webview.controller().CoreWebView2() {
+            if let Ok(core) = core.cast::<ICoreWebView2_19>() {
+                let _ = core.SetMemoryUsageTargetLevel(level);
+            }
+        }
+    });
+}
+
+/// A window kept ready in the background goes away with the recorder (tray
+/// Quit, :stop) or when keep_window_ready is turned off, but never while you're looking at it.
+fn exit_with_recorder(app: AppHandle) {
+    loop {
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        let Some(window) = app.get_webview_window("main") else { continue };
+        if !window.is_visible().unwrap_or(true) && (recorder_window().is_none() || !keep_ready(&window)) {
+            app.exit(0);
+        }
     }
 }
 
@@ -103,11 +168,13 @@ fn allow_clips_dir(app: &AppHandle, cfg: &Config) {
     let _ = app.asset_protocol_scope().allow_directory(&dir, false);
 }
 
-/// The window starts hidden and is shown once the page has drawn, so it never flashes white.
+/// Called once the page has drawn. The window is already showing by then (see
+/// run), unless it was started hidden to be kept ready.
 #[tauri::command]
 fn ready(window: WebviewWindow) {
-    let _ = window.show();
-    let _ = window.set_focus();
+    if window.is_visible().unwrap_or(false) {
+        let _ = window.set_focus();
+    }
 }
 
 const DEFAULT_SIZE: [f64; 2] = [980.0, 600.0];
@@ -203,9 +270,20 @@ fn toggle_fullscreen(window: WebviewWindow) -> bool {
     on
 }
 
-/// Closing ends this process, and WebView2 with it; the recorder keeps going.
+/// Closes the window; the recorder keeps going. Normally that ends this process
+/// and WebView2 with it; with keep_window_ready it only hides it.
 #[tauri::command]
-fn close(app: AppHandle) {
+fn close(app: AppHandle, window: WebviewWindow) {
+    if keep_ready(&window) {
+        hide(&window);
+    } else {
+        app.exit(0);
+    }
+}
+
+/// Ends this process whatever keep_window_ready says (✕, :q!).
+#[tauri::command]
+fn quit(app: AppHandle) {
     app.exit(0);
 }
 
@@ -230,6 +308,9 @@ fn config_json(c: &Config) -> Value {
         "video_bitrate_kbps": c.video_bitrate_kbps,
         "preset": c.preset,
         "audio": c.audio,
+        "desktop_volume": c.desktop_volume,
+        "mic": c.mic,
+        "mic_volume": c.mic_volume,
         "audio_bitrate_kbps": c.audio_bitrate_kbps,
         "monitor": c.monitor,
         "draw_mouse": c.draw_mouse,
@@ -244,6 +325,7 @@ fn config_json(c: &Config) -> Value {
         "ffmpeg_path": c.ffmpeg_path.as_ref().map(|p| p.to_string_lossy().into_owned()),
         "beep": c.beep,
         "notify": c.notify,
+        "keep_window_ready": c.keep_window_ready,
         "start_with_windows": c.start_with_windows,
     })
 }
@@ -292,6 +374,16 @@ fn status(state: State<UiState>) -> Status {
         *prev = Some(CpuSample { pid, cpu_100ns, at: now });
     }
     st
+}
+
+/// Peak levels of desktop audio and microphone since the last ask (1.0 = full
+/// scale), for the meters. None while the recorder isn't running.
+#[tauri::command]
+fn levels() -> Option<[f32; 2]> {
+    let h = recorder_window()?;
+    let mut res = 0usize;
+    let ok = unsafe { SendMessageTimeoutW(h, WM_LEVELS, WPARAM(0), LPARAM(0), SMTO_ABORTIFHUNG | SMTO_BLOCK, 200, Some(&mut res)) };
+    (ok.0 != 0).then(|| [((res >> 16) & 0xffff) as f32 / 16384.0, (res & 0xffff) as f32 / 16384.0])
 }
 
 /// Total CPU time (100ns units) and working set (MB) of a process.

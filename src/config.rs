@@ -34,7 +34,13 @@ pub struct Config {
     pub resolution: Option<(u32, u32)>,
     pub video_bitrate_kbps: u32,
     pub preset: String,
+    /// Desktop audio (loopback of the default output device).
     pub audio: bool,
+    /// Percent, 0-200. Applied live.
+    pub desktop_volume: u32,
+    /// The default microphone, mixed in.
+    pub mic: bool,
+    pub mic_volume: u32,
     pub audio_bitrate_kbps: u32,
     pub monitor: u32,
     pub draw_mouse: bool,
@@ -46,6 +52,8 @@ pub struct Config {
     pub beep: bool,
     pub notify: bool,
     pub start_with_windows: bool,
+    /// Keep the window's process running hidden after closing, so it opens instantly.
+    pub keep_window_ready: bool,
     /// Where :move left the window, in logical px from its monitor's corner. None = centered.
     pub window_position: Option<[f64; 2]>,
     /// What :resize left the window at, in logical px. None = the default size.
@@ -63,6 +71,9 @@ impl Default for Config {
             video_bitrate_kbps: 10_000,
             preset: "ultrafast".into(),
             audio: true,
+            desktop_volume: 100,
+            mic: false,
+            mic_volume: 100,
             audio_bitrate_kbps: 160,
             monitor: 0,
             draw_mouse: true,
@@ -72,6 +83,7 @@ impl Default for Config {
             beep: true,
             notify: true,
             start_with_windows: true,
+            keep_window_ready: false,
             window_position: None,
             window_size: None,
         }
@@ -113,6 +125,11 @@ preset = ultrafast
 
 # Record desktop audio (whatever plays on your default output device).
 audio = true
+# Record your default microphone too, mixed in. Off = flagra doesn't open it at all.
+mic = false
+# Volumes in percent (0-200). They change the recording live, without restarting it.
+desktop_volume = 100
+mic_volume = 100
 audio_bitrate_kbps = 160
 
 # Which monitor to record (0 = first).
@@ -136,6 +153,10 @@ notify = true
 # Start flagra (recording in the tray) when you log in to Windows.
 start_with_windows = true
 
+# Keep the window ready in the background so it opens instantly, instead of in ~0.5 s.
+# Costs some memory while closed (WebView2 kept in its low-memory mode).
+keep_window_ready = false
+
 # Where the window opens and how big, set by :move and :resize in the window. Empty = centered, default size.
 window_position =
 window_size =
@@ -149,7 +170,8 @@ impl Config {
             || self.resolution != other.resolution
             || self.video_bitrate_kbps != other.video_bitrate_kbps
             || self.preset != other.preset
-            || self.audio != other.audio
+            // Only whether there's an audio track at all; which sources and how loud apply live.
+            || (self.audio || self.mic) != (other.audio || other.mic)
             || self.audio_bitrate_kbps != other.audio_bitrate_kbps
             || self.monitor != other.monitor
             || self.draw_mouse != other.draw_mouse
@@ -254,10 +276,14 @@ pub fn parse(text: &str) -> (Config, Vec<String>) {
                 }
             }
             "audio" => boolean(val, &mut c.audio, &mut bad),
+            "mic" => boolean(val, &mut c.mic, &mut bad),
+            "desktop_volume" => num(val, 0, 200, &mut c.desktop_volume, &mut bad),
+            "mic_volume" => num(val, 0, 200, &mut c.mic_volume, &mut bad),
             "draw_mouse" => boolean(val, &mut c.draw_mouse, &mut bad),
             "beep" => boolean(val, &mut c.beep, &mut bad),
             "notify" => boolean(val, &mut c.notify, &mut bad),
             "start_with_windows" => boolean(val, &mut c.start_with_windows, &mut bad),
+            "keep_window_ready" => boolean(val, &mut c.keep_window_ready, &mut bad),
             "priority" => {
                 c.priority = match val.to_ascii_lowercase().replace([' ', '-'], "_").as_str() {
                     "idle" | "low" => Priority::Idle,
