@@ -1,0 +1,855 @@
+'use strict';
+
+const $ = id => document.getElementById(id);
+const el = {
+  rec: $('rec'), usage: $('usage'),
+  player: $('player'), video: $('video'), clock: $('clock'), playname: $('playname'),
+  list: $('list'), help: $('help'),
+  live: $('live'), input: $('input'), preview: $('preview'),
+  mode: $('mode'), info: $('info'), hints: $('hints'),
+};
+
+// ---------------------------------------------------------------- backend
+
+const api = window.__TAURI__ ? tauriApi() : browserApi();
+
+function tauriApi() {
+  const { invoke, convertFileSrc } = window.__TAURI__.core;
+  return {
+    ready: () => invoke('ready'),
+    close: () => invoke('close'),
+    load: () => invoke('load'),
+    status: () => invoke('status'),
+    set: (key, value) => invoke('set_setting', { key, value: String(value) }),
+    clips: () => invoke('list_clips'),
+    saveClip: () => invoke('save_clip'),
+    remove: path => invoke('delete_clip', { path }),
+    rename: (path, name) => invoke('rename_clip', { path, name }),
+    copy: path => invoke('copy_clip', { path }),
+    reveal: path => invoke('reveal', { path }),
+    play: path => invoke('play', { path }),
+    open: what => invoke('open_special', { what }),
+    start: () => invoke('start_recorder'),
+    stop: () => invoke('stop_recorder'),
+    src: path => convertFileSrc(path),
+  };
+}
+
+// Lets the UI run in a plain browser (open ui/index.html) to iterate on it without rebuilding.
+function browserApi() {
+  const now = Date.now();
+  const fake = (n, ago, dur) => ({
+    name: `PowerClip_2026-10-27_${n}.mp4`, path: `C:\\clips\\PowerClip_${n}.mp4`,
+    size: Math.round(dur * 1.27e6), modified: now - ago * 1000, duration: dur,
+  });
+  let clips = [fake('21-14-02', 40, 20.2), fake('20-56-28', 1100, 10.03), fake('20-41-20', 2500, 8.8),
+    fake('2026-10-26_23-02-11', 86400 + 3000, 20.5), fake('2026-10-20_18-40-55', 7 * 86400, 31.1)];
+  let config = {
+    hotkey: 'Alt+F10', clip_seconds: 20, fps: 60, resolution: 'native', video_bitrate_kbps: 10000,
+    preset: 'ultrafast', audio: true, audio_bitrate_kbps: 160, monitor: 0, draw_mouse: true,
+    priority: 'below_normal', output_dir: 'C:\\Users\\you\\Videos\\PowerClip', output_dir_custom: false,
+    ffmpeg_path: null, beep: true, notify: true,
+  };
+  const capture = new Set(['fps', 'resolution', 'video_bitrate_kbps', 'preset', 'audio', 'audio_bitrate_kbps',
+    'monitor', 'draw_mouse', 'priority', 'ffmpeg_path']);
+  return {
+    ready: async () => {}, close: async () => {},
+    load: async () => ({ config, warnings: [], cpus: 6 }),
+    status: async () => ({ running: true, recording: true, buffered: 22.8, cpu: 9 + Math.random() * 3, mem_mb: 113 }),
+    set: async (key, value) => {
+      const bool = typeof config[key] === 'boolean';
+      config = { ...config, [key]: bool ? value === 'true' : /^\d+$/.test(value) ? Number(value) : value };
+      return { config, restarted: capture.has(key) };
+    },
+    clips: async () => clips,
+    saveClip: async () => { clips = [fake(`21-${Date.now() % 60}`, 0, 20), ...clips]; },
+    remove: async path => { clips = clips.filter(c => c.path !== path); },
+    rename: async (path, name) => {
+      const p = `C:\\clips\\${name}.mp4`;
+      clips = clips.map(c => (c.path === path ? { ...c, name: `${name}.mp4`, path: p } : c));
+      return p;
+    },
+    copy: async () => {}, reveal: async () => {}, play: async () => {}, open: async () => {},
+    start: async () => {}, stop: async () => {},
+    src: () => '',
+  };
+}
+
+// ---------------------------------------------------------------- state
+
+let config = null;
+let clips = [];
+let clipsSig = '';
+let view = 'clips';              // 'clips' | 'settings'
+const sel = { clips: 0, settings: 0 };
+let playing = null;              // path of the clip in the player
+let commandMode = false;
+let hotkeyMode = false;
+let helpOpen = false;
+let deleteArmed = 0;             // time of the first d of dd
+let awaitingClip = 0;            // time we asked the recorder for a clip
+let lastStatus = null;
+
+const CAPTURE_KEYS = new Set(['fps', 'resolution', 'video_bitrate_kbps', 'preset', 'audio',
+  'audio_bitrate_kbps', 'monitor', 'draw_mouse', 'priority', 'ffmpeg_path']);
+const PRESETS = ['ultrafast', 'superfast', 'veryfast', 'faster', 'fast', 'medium'];
+const PRIORITIES = { idle: 'idle', below: 'below_normal', below_normal: 'below_normal', normal: 'normal',
+  above: 'above_normal', above_normal: 'above_normal' };
+const RESOLUTIONS = { native: 'native', '480p': '854x480', '540p': '960x540', '720p': '1280x720',
+  '900p': '1600x900', '1080p': '1920x1080', '1440p': '2560x1440', '2160p': '3840x2160', '4k': '3840x2160' };
+
+// ---------------------------------------------------------------- formatting
+
+const errText = err => String(err?.message ?? err);
+const stem = name => name.replace(/\.mp4$/i, '');
+const nativeRes = () => `${Math.round(screen.width * devicePixelRatio)}x${Math.round(screen.height * devicePixelRatio)}`;
+const resLabel = r => (r === 'native' ? nativeRes() : r);
+const shortRes = r => {
+  const [w, h] = resLabel(r).split('x').map(Number);
+  return h && w / h > 1.7 && w / h < 1.8 ? `${h}p` : resLabel(r);
+};
+const mbps = kbps => (kbps >= 1000 ? `${+(kbps / 1000).toFixed(1)} Mbps` : `${kbps} kbps`);
+const priorityLabel = p => p.replace('_', ' ');
+
+function clock(sec) {
+  if (sec == null || !isFinite(sec)) return '–:––';
+  const s = Math.max(0, Math.round(sec));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+
+function size(bytes) {
+  return bytes >= 1e9 ? `${(bytes / 1e9).toFixed(2)} GB` : `${(bytes / 1e6).toFixed(1)} MB`;
+}
+
+function when(ms) {
+  const d = new Date(ms);
+  const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+  const today = new Date();
+  const yesterday = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1);
+  if (d.toDateString() === today.toDateString()) return `today ${time}`;
+  if (d.toDateString() === yesterday.toDateString()) return `yesterday ${time}`;
+  return `${d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })} ${time}`;
+}
+
+/** Roughly how big a clip is and how much RAM the replay buffer takes. */
+function footprint(c) {
+  const kbps = c.video_bitrate_kbps + (c.audio ? c.audio_bitrate_kbps : 0);
+  const mb = s => Math.round(kbps / 8 * s / 1000);
+  return { clip: mb(c.clip_seconds), ram: mb(c.clip_seconds + 3) };
+}
+
+function h(tag, cls, ...children) {
+  const node = document.createElement(tag);
+  if (cls) node.className = cls;
+  node.append(...children.filter(c => c != null && c !== false));
+  return node;
+}
+
+// ---------------------------------------------------------------- settings rows
+
+const SETTINGS = [
+  { key: 'hotkey', label: 'hotkey', cmd: 'hotkey', value: c => c.hotkey },
+  { key: 'clip_seconds', label: 'clip length', cmd: 'len', value: c => `${c.clip_seconds} s` },
+  { key: 'fps', label: 'frame rate', cmd: 'fps', value: c => `${c.fps} fps` },
+  {
+    key: 'resolution', label: 'resolution', cmd: 'res',
+    value: c => (c.resolution === 'native' ? ['native', ` (${nativeRes()})`] : c.resolution),
+  },
+  {
+    key: 'video_bitrate_kbps', label: 'video bitrate', cmd: 'bitrate',
+    value: c => {
+      const f = footprint(c);
+      return [mbps(c.video_bitrate_kbps), ` · ~${f.clip} MB per clip, ~${f.ram} MB of RAM`];
+    },
+  },
+  { key: 'preset', label: 'x264 preset', cmd: 'preset', value: c => c.preset },
+  {
+    key: 'audio', label: 'desktop audio', cmd: 'audio', bool: true,
+    value: c => (c.audio ? ['on', ` · ${c.audio_bitrate_kbps} kbps`] : 'off'),
+  },
+  { key: 'monitor', label: 'monitor', cmd: 'monitor', value: c => String(c.monitor) },
+  { key: 'draw_mouse', label: 'mouse cursor', cmd: 'mouse', bool: true, value: c => (c.draw_mouse ? 'shown' : 'hidden') },
+  { key: 'priority', label: 'encoder priority', cmd: 'priority', value: c => priorityLabel(c.priority) },
+  {
+    key: 'output_dir', label: 'clips folder', cmd: 'dir',
+    value: c => [c.output_dir, c.output_dir_custom ? '' : ' (default)'],
+  },
+  { key: 'beep', label: 'beep on save', cmd: 'beep', bool: true, value: c => (c.beep ? 'on' : 'off') },
+  { key: 'notify', label: 'notification', cmd: 'notify', bool: true, value: c => (c.notify ? 'on' : 'off') },
+  {
+    key: 'ffmpeg_path', label: 'ffmpeg', cmd: 'ffmpeg',
+    value: c => c.ffmpeg_path ?? ['auto', ' (next to powerclip.exe, then PATH)'],
+  },
+];
+
+/** What the command line is prefilled with when changing a setting from the list. */
+function settingArg(s) {
+  const c = config;
+  switch (s.key) {
+    case 'resolution': return c.resolution === 'native' ? 'native' : c.resolution;
+    case 'video_bitrate_kbps': return `${c.video_bitrate_kbps / 1000}m`;
+    case 'output_dir': return c.output_dir_custom ? c.output_dir : '';
+    case 'ffmpeg_path': return c.ffmpeg_path ?? '';
+    default: return String(c[s.key]);
+  }
+}
+
+// ---------------------------------------------------------------- rendering
+
+function render() {
+  document.body.classList.toggle('clips', view === 'clips');
+  document.body.classList.toggle('settings', view === 'settings');
+  el.list.hidden = helpOpen;
+  el.help.hidden = !helpOpen;
+  if (!helpOpen) el.list.replaceChildren(...(view === 'clips' ? clipRows() : settingRows()));
+  markSelection();
+  setMode();
+  setHints();
+}
+
+function clipRows() {
+  if (!clips.length) {
+    const hk = h('b', null, config?.hotkey ?? 'the hotkey');
+    return [h('li', 'empty', 'No clips yet. Press ', hk, ' in a game (or ', h('b', null, 'c'),
+      ' here) to save the last ', `${config?.clip_seconds ?? 20} seconds.`)];
+  }
+  return clips.map((c, i) => {
+    const li = h('li', 'row' + (c.path === playing ? ' playing' : ''),
+      h('span', 'n', `[${i + 1}]`),
+      h('span', 'name', stem(c.name)),
+      h('span', 'dur', clock(c.duration)),
+      h('span', 'size', size(c.size)),
+      h('span', 'when', when(c.modified)));
+    li.dataset.i = i;
+    return li;
+  });
+}
+
+function settingRows() {
+  if (!config) return [h('li', 'empty', 'Loading settings…')];
+  return SETTINGS.map((s, i) => {
+    const v = s.value(config);
+    const [main, note] = Array.isArray(v) ? v : [v, ''];
+    const li = h('li', 'row',
+      h('span', 'label', s.label),
+      h('span', 'value', main, note && h('span', 'note', note)),
+      h('span', 'cmd', s.bool ? `↵ toggles · :${s.cmd}` : s.key === 'hotkey' ? '↵ press a new combo' : `:${s.cmd}`));
+    li.dataset.i = i;
+    return li;
+  });
+}
+
+function count() {
+  return view === 'clips' ? clips.length : SETTINGS.length;
+}
+
+function markSelection() {
+  const i = sel[view];
+  for (const row of el.list.children) {
+    const on = Number(row.dataset.i) === i;
+    row.classList.toggle('sel', on);
+    if (on) row.scrollIntoView({ block: 'nearest' });
+  }
+}
+
+function move(delta, absolute = false) {
+  const n = count();
+  if (!n) return;
+  sel[view] = absolute ? (delta < 0 ? n - 1 : 0) : Math.min(n - 1, Math.max(0, sel[view] + delta));
+  deleteArmed = 0;
+  markSelection();
+}
+
+function setMode() {
+  el.mode.textContent = hotkeyMode ? 'HOTKEY' : commandMode ? 'COMMAND' : helpOpen ? 'HELP'
+    : view === 'settings' ? 'SETTINGS' : playing ? 'PLAYING' : 'CLIPS';
+}
+
+const HINTS = {
+  clips: [['↵', 'play'], ['y', 'copy'], ['r', 'rename'], ['dd', 'delete'], ['f', 'folder'], ['c', 'clip now'],
+    ['tab', 'settings'], [':', 'command'], ['?', 'help']],
+  player: [['space', 'pause'], ['← →', '5 s'], [', .', 'frame'], ['y', 'copy'], ['o', 'player app'], ['esc', 'close']],
+  settings: [['↵', 'change'], ['tab', 'clips'], [':', 'command'], ['?', 'help'], ['esc', 'close']],
+  command: [['↵', 'run'], ['tab', 'complete'], ['esc', 'cancel']],
+  hotkey: [['press', 'the new combo'], ['esc', 'cancel']],
+  help: [['esc', 'back']],
+};
+
+function setHints() {
+  const which = hotkeyMode ? 'hotkey' : commandMode ? 'command' : helpOpen ? 'help'
+    : view === 'settings' ? 'settings' : playing ? 'player' : 'clips';
+  const hints = [...HINTS[which]];
+  const draw = () => el.hints.replaceChildren(...hints.map(([k, label]) => h('span', null, h('b', null, k), label)));
+  draw();
+  // Drop hints from the end rather than squeezing the message out.
+  const message = Math.min(480, Math.max(220, el.info.textContent ? el.info.scrollWidth : 0));
+  const room = () => el.hints.parentElement.clientWidth - el.mode.offsetWidth - message;
+  while (hints.length > 1 && el.hints.offsetWidth > room()) {
+    hints.pop();
+    draw();
+  }
+}
+
+let infoTimer = 0;
+function say(text, kind = '') {
+  clearTimeout(infoTimer);
+  el.info.textContent = text;
+  el.info.className = kind;
+  setHints();
+  if (kind === 'done') infoTimer = setTimeout(() => say(''), 6000);
+}
+
+function renderStatus(s) {
+  lastStatus = s;
+  const sep = () => h('span', 'sep', '·');
+  el.rec.classList.toggle('off', !s.recording);
+  if (!s.running) {
+    el.rec.replaceChildren(h('span', 'dot', '○'), h('b', null, 'not running'), sep(), ':start begins recording');
+  } else if (!s.recording) {
+    el.rec.replaceChildren(h('span', 'dot', '○'), h('b', null, 'capture down'), sep(),
+      s.error ?? 'starting…');
+  } else if (config) {
+    const audio = config.audio ? 'audio' : 'no audio';
+    el.rec.replaceChildren(h('span', 'dot', '●'), h('b', null, 'REC'), sep(),
+      `${shortRes(config.resolution)}${config.fps} · ${mbps(config.video_bitrate_kbps)} · ${audio}`, sep(),
+      `${Math.min(s.buffered, config.clip_seconds).toFixed(0)} of ${config.clip_seconds} s buffered`);
+  }
+  el.usage.replaceChildren(...(s.recording && s.cpu != null
+    ? ['ffmpeg ', h('b', null, `${s.cpu.toFixed(0)}%`), ' CPU', sep(), h('b', null, `${Math.round(s.mem_mb ?? 0)} MB`)]
+    : []));
+}
+
+// ---------------------------------------------------------------- data
+
+async function refreshStatus() {
+  try { renderStatus(await api.status()); } catch {}
+}
+
+async function refreshClips() {
+  let list;
+  try { list = await api.clips(); } catch (err) { say(errText(err), 'error'); return; }
+  const sig = list.map(c => c.path + c.modified).join('|');
+  if (sig === clipsSig) return;
+  const selected = clips[sel.clips]?.path;
+  const fresh = list[0] && clipsSig && !clips.some(c => c.path === list[0].path) ? list[0] : null;
+  clips = list;
+  clipsSig = sig;
+  if (fresh && (awaitingClip || sel.clips === 0)) {
+    sel.clips = 0;
+    say(`saved ${stem(fresh.name)} (${clock(fresh.duration)})`, 'done');
+    awaitingClip = 0;
+  } else {
+    const i = clips.findIndex(c => c.path === selected);
+    sel.clips = i >= 0 ? i : Math.max(0, Math.min(sel.clips, clips.length - 1));
+  }
+  if (playing && !clips.some(c => c.path === playing)) stopPlayer();
+  if (view === 'clips' && !helpOpen) render();
+}
+
+const current = () => clips[sel.clips];
+
+// ---------------------------------------------------------------- clip actions
+
+async function saveClip() {
+  try {
+    await api.saveClip();
+    awaitingClip = Date.now();
+    say(`saving the last ${config.clip_seconds} s…`);
+    setTimeout(refreshClips, 700);
+  } catch (err) {
+    say(errText(err), 'error');
+  }
+}
+
+async function copyClip(c = current()) {
+  if (!c) return;
+  try {
+    await api.copy(c.path);
+    say(`${stem(c.name)} copied · paste it into Discord, a chat or a folder`, 'done');
+  } catch (err) { say(errText(err), 'error'); }
+}
+
+async function deleteClip(c = current()) {
+  if (!c) return;
+  try {
+    if (c.path === playing) stopPlayer();
+    await api.remove(c.path);
+    say(`${stem(c.name)} moved to the Recycle Bin`, 'done');
+    await refreshClips();
+  } catch (err) { say(errText(err), 'error'); }
+}
+
+async function renameClip(c, name) {
+  try {
+    const path = await api.rename(c.path, name);
+    if (playing === c.path) playing = path;
+    say(`renamed to ${stem(name)}`, 'done');
+    await refreshClips();
+    const i = clips.findIndex(x => x.path === path);
+    if (i >= 0) { sel.clips = i; markSelection(); }
+  } catch (err) { say(errText(err), 'error'); }
+}
+
+function playClip(c) {
+  if (!c) return;
+  if (playing === c.path) { togglePause(); return; }
+  const src = api.src(c.path);
+  if (!src) { say('playback needs the app (o opens it in your player)', 'error'); return; }
+  playing = c.path;
+  el.player.hidden = false;
+  el.playname.textContent = stem(c.name);
+  el.video.src = src;
+  el.video.play().catch(() => {});
+  render();
+}
+
+function stopPlayer() {
+  if (!playing) return;
+  el.video.pause();
+  // Dropping the source frees the decoder and its memory right away.
+  el.video.removeAttribute('src');
+  el.video.load();
+  el.player.hidden = true;
+  playing = null;
+  render();
+}
+
+function togglePause() {
+  if (el.video.paused) el.video.play().catch(() => {}); else el.video.pause();
+}
+
+function seek(delta) {
+  const v = el.video;
+  if (!isFinite(v.duration)) return;
+  v.currentTime = Math.min(v.duration, Math.max(0, v.currentTime + delta));
+}
+
+function updateClock() {
+  const v = el.video;
+  el.clock.textContent = `${clock(v.currentTime)} / ${clock(v.duration)}${v.paused ? '  paused' : ''}`;
+}
+['timeupdate', 'play', 'pause', 'loadedmetadata', 'seeked'].forEach(e => el.video.addEventListener(e, updateClock));
+el.video.addEventListener('error', () => {
+  if (playing) say("can't play this clip here · o opens it in your video player", 'error');
+});
+
+// ---------------------------------------------------------------- settings
+
+async function applySetting(key, value) {
+  try {
+    const r = await api.set(key, value);
+    config = r.config;
+    const label = SETTINGS.find(s => s.key === key)?.label ?? key;
+    say(`${label} saved${r.restarted ? ' · capture restarted' : ''}`, 'done');
+    render();
+    refreshStatus();
+  } catch (err) {
+    say(errText(err), 'error');
+  }
+}
+
+function activateSetting() {
+  const s = SETTINGS[sel.settings];
+  if (s.bool) applySetting(s.key, !config[s.key]);
+  else if (s.key === 'hotkey') enterHotkeyMode();
+  else openCommand(`${s.cmd} ${settingArg(s)}`, s.cmd.length + 1);
+}
+
+// ---------------------------------------------------------------- hotkey capture
+
+// By Windows virtual-key code, which is what RegisterHotKey uses. (e.code is
+// empty for keys sent by macro tools and remappers, so it isn't reliable here.)
+const KEY_NAMES = {
+  32: 'Space', 38: 'Up', 40: 'Down', 37: 'Left', 39: 'Right', 36: 'Home', 35: 'End', 45: 'Insert', 46: 'Delete',
+  33: 'PageUp', 34: 'PageDown', 44: 'PrintScreen', 19: 'Pause', 145: 'ScrollLock', 192: '`',
+};
+
+function keyName(vk) {
+  if ((vk >= 65 && vk <= 90) || (vk >= 48 && vk <= 57)) return String.fromCharCode(vk);
+  if (vk >= 112 && vk <= 135) return `F${vk - 111}`;
+  if (vk >= 96 && vk <= 105) return `Numpad${vk - 96}`;
+  return KEY_NAMES[vk] ?? null;
+}
+
+function enterHotkeyMode() {
+  hotkeyMode = true;
+  say(`press the new combo · now ${config.hotkey}`);
+  setMode();
+  setHints();
+}
+
+function exitHotkeyMode() {
+  hotkeyMode = false;
+  setMode();
+  setHints();
+}
+
+function captureHotkey(e) {
+  e.preventDefault();
+  const mods = [e.ctrlKey && 'Ctrl', e.altKey && 'Alt', e.shiftKey && 'Shift', e.metaKey && 'Win'].filter(Boolean);
+  if (e.key === 'Escape' && !mods.length) { exitHotkeyMode(); say('hotkey unchanged'); return; }
+  const key = keyName(e.keyCode);
+  if (!key) { say(mods.length ? `${mods.join('+')}+…` : 'press the new combo'); return; }
+  if (!mods.length && !/^(F\d+|Pause|ScrollLock|PrintScreen|Insert)$/.test(key)) {
+    say(`add Ctrl, Alt or Shift: ${key} alone would stop typing it anywhere else`, 'error');
+    return;
+  }
+  exitHotkeyMode();
+  applySetting('hotkey', [...mods, key].join('+'));
+}
+
+// ---------------------------------------------------------------- commands
+
+/** Turns validation failures (thrown strings) into an error preview. */
+function attempt(fn) {
+  try { return fn(); } catch (err) { return { error: errText(err) }; }
+}
+
+function change(key, value, label) {
+  const effect = CAPTURE_KEYS.has(key) ? 'restarts capture, so the buffer starts over' : 'applies right away';
+  return { label: `${label} · ${effect}`, run: () => applySetting(key, value) };
+}
+
+function int(s, min, max, what) {
+  const n = Number(s);
+  if (!Number.isInteger(n) || n < min || n > max) throw `${what}: a whole number from ${min} to ${max}`;
+  return n;
+}
+
+function bool(s, now) {
+  if (!s) return !now;
+  if (/^(on|yes|true|1)$/i.test(s)) return true;
+  if (/^(off|no|false|0)$/i.test(s)) return false;
+  throw 'on or off (or nothing, to toggle)';
+}
+
+function kbps(s) {
+  const m = /^(\d+(?:\.\d+)?)\s*(m|mb|mbps|k|kb|kbps)?$/i.exec(s);
+  if (!m) throw 'a bitrate like 8m, 12.5m or 6000k';
+  let n = parseFloat(m[1]);
+  const unit = (m[2] ?? '').toLowerCase();
+  if (unit.startsWith('m') || (!unit && n < 100)) n *= 1000;
+  n = Math.round(n);
+  if (n < 100 || n > 200000) throw 'bitrate: from 0.1m to 200m';
+  return n;
+}
+
+function onOff(key, label, show) {
+  return arg => attempt(() => {
+    const v = bool(arg, config[key]);
+    return change(key, v, `${label} ${show(config[key])} → ${show(v)}`);
+  });
+}
+
+const COMMANDS = {
+  clip: () => ({ label: `save the last ${config.clip_seconds} s now`, run: saveClip }),
+  len: arg => (!arg ? { label: `clip length in seconds (now ${config.clip_seconds})` } : attempt(() => {
+    const n = int(arg, 1, 600, 'length');
+    return change('clip_seconds', n, `clip length ${config.clip_seconds} → ${n} s`);
+  })),
+  fps: arg => (!arg ? { label: `frames per second (now ${config.fps}) · 30 roughly halves the CPU cost` } : attempt(() => {
+    const n = int(arg, 1, 240, 'fps');
+    return change('fps', n, `${config.fps} → ${n} fps`);
+  })),
+  res: arg => (!arg ? { label: `native, 720p, 900p, 1080p… or WIDTHxHEIGHT (now ${config.resolution})` } : attempt(() => {
+    const r = RESOLUTIONS[arg.toLowerCase()] ?? (/^\d{2,4}x\d{2,4}$/i.test(arg) ? arg.toLowerCase() : null);
+    if (!r) throw 'native, 720p, 900p, 1080p… or WIDTHxHEIGHT';
+    return change('resolution', r, `resolution ${resLabel(config.resolution)} → ${resLabel(r)}`);
+  })),
+  bitrate: arg => (!arg ? { label: `video bitrate, e.g. 8m (now ${mbps(config.video_bitrate_kbps)})` } : attempt(() => {
+    const n = kbps(arg);
+    const f = footprint({ ...config, video_bitrate_kbps: n });
+    return change('video_bitrate_kbps', n,
+      `${mbps(config.video_bitrate_kbps)} → ${mbps(n)} · ~${f.clip} MB per clip, ~${f.ram} MB RAM`);
+  })),
+  preset: arg => (!arg ? { label: `${PRESETS.join(', ')} (now ${config.preset}) · slower = more CPU` } : attempt(() => {
+    const p = arg.toLowerCase();
+    if (!PRESETS.includes(p)) throw PRESETS.join(', ');
+    return change('preset', p, `preset ${config.preset} → ${p}`);
+  })),
+  audio: arg => attempt(() => {
+    if (/^\d+k?$/i.test(arg ?? '')) {
+      const n = int(arg.replace(/k$/i, ''), 32, 512, 'audio bitrate');
+      return { label: `desktop audio on at ${n} kbps · restarts capture, so the buffer starts over`,
+        run: async () => { await applySetting('audio_bitrate_kbps', n); if (!config.audio) await applySetting('audio', true); } };
+    }
+    const v = bool(arg, config.audio);
+    return change('audio', v, `desktop audio ${config.audio ? 'on' : 'off'} → ${v ? 'on' : 'off'}`);
+  }),
+  monitor: arg => (!arg ? { label: `which display to record, 0 = first (now ${config.monitor})` } : attempt(() => {
+    const n = int(arg, 0, 16, 'monitor');
+    return change('monitor', n, `monitor ${config.monitor} → ${n}`);
+  })),
+  mouse: onOff('draw_mouse', 'mouse cursor', v => (v ? 'shown' : 'hidden')),
+  beep: onOff('beep', 'beep on save', v => (v ? 'on' : 'off')),
+  notify: onOff('notify', 'notification on save', v => (v ? 'on' : 'off')),
+  priority: arg => (!arg ? { label: `idle, below, normal or above (now ${priorityLabel(config.priority)})` } : attempt(() => {
+    const p = PRIORITIES[arg.toLowerCase()];
+    if (!p) throw 'idle, below, normal or above';
+    return change('priority', p, `encoder priority ${priorityLabel(config.priority)} → ${priorityLabel(p)}`);
+  })),
+  dir: arg => (!arg ? { label: `folder for clips (now ${config.output_dir}) · :dir reset for the default` }
+    : /^(reset|default)$/i.test(arg) ? change('output_dir', '', 'clips go to Videos\\PowerClip')
+    : change('output_dir', arg, `clips go to ${arg}`)),
+  ffmpeg: arg => (!arg ? { label: `path to ffmpeg.exe (now ${config.ffmpeg_path ?? 'auto'}) · :ffmpeg auto to search` }
+    : /^auto$/i.test(arg) ? change('ffmpeg_path', '', 'find ffmpeg automatically')
+    : change('ffmpeg_path', arg, `use ${arg}`)),
+  hotkey: arg => (!arg ? { label: `press the new combo next (now ${config.hotkey})`, run: enterHotkeyMode }
+    : change('hotkey', arg, `hotkey ${config.hotkey} → ${arg}`)),
+  rename: arg => {
+    const c = current();
+    if (!c || view !== 'clips') return { error: 'select a clip first' };
+    if (!arg) return { label: 'type the new name' };
+    return { label: `rename ${stem(c.name)} → ${arg.replace(/\.mp4$/i, '')}`, run: () => renameClip(c, arg) };
+  },
+  delete: () => {
+    const c = current();
+    return c ? { label: `move ${stem(c.name)} to the Recycle Bin`, run: () => deleteClip(c) } : { error: 'no clip selected' };
+  },
+  copy: () => {
+    const c = current();
+    return c ? { label: `copy ${stem(c.name)} to paste it anywhere`, run: () => copyClip(c) } : { error: 'no clip selected' };
+  },
+  folder: () => ({ label: 'open the clips folder', run: () => api.open('folder').catch(err => say(errText(err), 'error')) }),
+  log: arg => (/^ffmpeg$/i.test(arg ?? '')
+    ? { label: 'open ffmpeg.log', run: () => api.open('ffmpeg_log').catch(err => say(errText(err), 'error')) }
+    : { label: 'open powerclip.log (:log ffmpeg for ffmpeg.log)', run: () => api.open('log').catch(err => say(errText(err), 'error')) }),
+  ini: () => ({ label: 'open powerclip.ini in your editor', run: () => api.open('ini').catch(err => say(errText(err), 'error')) }),
+  start: () => (lastStatus?.running ? { label: 'already recording' }
+    : { label: 'start recording in the background', run: startRecorder }),
+  stop: () => ({
+    label: 'quit the recorder: nothing is recorded until :start or you open PowerClip again',
+    run: async () => { await api.stop(); say('recorder stopped'); setTimeout(refreshStatus, 500); },
+  }),
+  settings: () => ({ label: 'show settings', run: () => switchView('settings') }),
+  clips: () => ({ label: 'show clips', run: () => switchView('clips') }),
+  help: () => ({ label: 'list the keys and commands', run: showHelp }),
+  q: () => ({ label: 'close this window (recording continues)', run: () => api.close() }),
+};
+
+function parseCommand(text) {
+  const t = text.trim();
+  if (!t) return { label: 'type a command · :help lists them' };
+  const name = t.split(/\s+/)[0].toLowerCase();
+  const arg = t.slice(name.length).trim();
+  const fn = COMMANDS[name];
+  if (fn) return fn(arg || undefined);
+  const matches = Object.keys(COMMANDS).filter(k => k.startsWith(name));
+  return matches.length
+    ? { label: matches.map(m => `:${m}`).join('  ') }
+    : { error: `no command ${name} · :help lists them` };
+}
+
+function openCommand(text = '', selectFrom = null) {
+  commandMode = true;
+  el.live.hidden = false;
+  el.input.value = text;
+  el.input.focus();
+  if (selectFrom != null) el.input.setSelectionRange(selectFrom, text.length);
+  previewCommand();
+  setMode();
+  setHints();
+}
+
+function closeCommand() {
+  commandMode = false;
+  el.live.hidden = true;
+  el.input.blur();
+  setMode();
+  setHints();
+}
+
+function previewCommand() {
+  const cmd = parseCommand(el.input.value);
+  el.preview.textContent = cmd.error ?? cmd.label ?? '';
+  el.preview.className = cmd.error ? 'error' : cmd.run ? 'ok' : '';
+}
+
+function runCommand() {
+  const cmd = parseCommand(el.input.value);
+  if (!cmd.run) return;
+  closeCommand();
+  cmd.run();
+}
+
+function completeCommand() {
+  const v = el.input.value;
+  if (/\s/.test(v.trim())) return;
+  const matches = Object.keys(COMMANDS).filter(k => k.startsWith(v.trim().toLowerCase()));
+  if (matches.length === 1) el.input.value = `${matches[0]} `;
+  previewCommand();
+}
+
+el.input.addEventListener('input', previewCommand);
+
+async function startRecorder() {
+  try {
+    await api.start();
+    say('recorder starting…');
+    setTimeout(refreshStatus, 1500);
+  } catch (err) { say(errText(err), 'error'); }
+}
+
+// ---------------------------------------------------------------- help
+
+function showHelp() {
+  helpOpen = true;
+  const rows = [
+    ['Clips'],
+    ['↑ ↓  j k', 'select (g / G: first / last)'], ['↵', 'play here (↵ again pauses)'],
+    ['y', 'copy the file: paste it into Discord, a chat or a folder'], ['r', 'rename'],
+    ['d d', 'move to the Recycle Bin'], ['f', 'show in Explorer'], ['o', 'open in your video player'],
+    ['c', `save the last ${config?.clip_seconds ?? 20} s now (same as ${config?.hotkey ?? 'the hotkey'})`],
+    ['Player'],
+    ['space', 'pause / play'], ['← →', '5 s back / forward (Shift: 1 s)'], [', .', 'one frame back / forward'],
+    ['m', 'mute'], ['esc', 'close the player'],
+    ['Anywhere'],
+    ['tab', 'clips ⇄ settings'], [':', 'command line'], ['esc', 'close the window (recording continues)'],
+    ['Commands'],
+    [':clip', 'save a clip now'], [':len 30', 'clip length in seconds'], [':fps 30', 'frame rate'],
+    [':res 720p', 'resolution (native, 720p, 1080p, 1600x900…)'], [':bitrate 8m', 'video bitrate'],
+    [':preset veryfast', 'x264 preset'], [':audio on|off|192', 'desktop audio / its bitrate'],
+    [':hotkey', 'press a new combo'], [':monitor 1', 'which display'], [':mouse', 'show / hide the cursor'],
+    [':priority below', 'encoder priority'], [':dir D:\\Clips', 'clips folder (:dir reset)'],
+    [':beep  :notify', 'toggle feedback on save'], [':ffmpeg PATH', 'ffmpeg.exe to use (:ffmpeg auto)'],
+    [':rename  :delete  :copy', 'act on the selected clip'],
+    [':folder  :log  :ini', 'open the clips folder, the log, the settings file'],
+    [':start  :stop', 'start / quit the background recorder'], [':q', 'close this window'],
+  ];
+  el.help.replaceChildren(...rows.flatMap(r => (r.length === 1
+    ? [h('div', 'head', r[0])]
+    : [h('b', null, r[0]), h('span', null, r[1])])));
+  render();
+}
+
+function closeHelp() {
+  helpOpen = false;
+  render();
+}
+
+// ---------------------------------------------------------------- views
+
+function switchView(to = view === 'clips' ? 'settings' : 'clips') {
+  view = to;
+  helpOpen = false;
+  render();
+}
+
+// ---------------------------------------------------------------- keys
+
+document.addEventListener('keydown', e => {
+  if (hotkeyMode) { captureHotkey(e); return; }
+
+  if (commandMode) {
+    if (e.key === 'Enter') { e.preventDefault(); runCommand(); }
+    else if (e.key === 'Escape') { e.preventDefault(); closeCommand(); }
+    else if (e.key === 'Tab') { e.preventDefault(); completeCommand(); }
+    return;
+  }
+  if (e.ctrlKey || e.altKey || e.metaKey) return;
+
+  const k = e.key;
+  const handled = () => { e.preventDefault(); return true; };
+
+  if (helpOpen) {
+    if (k === 'Escape' || k === '?' || k === 'q' || k === 'Enter') { handled(); closeHelp(); }
+    else if (k === ':') { handled(); openCommand(); }
+    return;
+  }
+  if (k === ':') { handled(); openCommand(); return; }
+  if (k === '?') { handled(); showHelp(); return; }
+  if (k === 'Tab') { handled(); switchView(); return; }
+
+  // Player keys take over while a clip plays.
+  if (playing && view === 'clips') {
+    const v = el.video;
+    const frame = 1 / 60;
+    switch (k) {
+      case ' ': handled(); togglePause(); return;
+      case 'ArrowLeft': handled(); seek(e.shiftKey ? -1 : -5); return;
+      case 'ArrowRight': handled(); seek(e.shiftKey ? 1 : 5); return;
+      case ',': handled(); v.pause(); seek(-frame); return;
+      case '.': handled(); v.pause(); seek(frame); return;
+      case 'm': handled(); v.muted = !v.muted; say(v.muted ? 'muted' : 'sound on'); return;
+      case 'Escape': handled(); stopPlayer(); return;
+    }
+  }
+
+  switch (k) {
+    case 'ArrowDown': case 'j': handled(); move(1); return;
+    case 'ArrowUp': case 'k': handled(); move(-1); return;
+    case 'PageDown': handled(); move(10); return;
+    case 'PageUp': handled(); move(-10); return;
+    case 'Home': case 'g': handled(); move(1, true); return;
+    case 'End': case 'G': handled(); move(-1, true); return;
+    case 'Escape': handled(); api.close(); return;
+  }
+
+  if (view === 'settings') {
+    if (k === 'Enter' || k === ' ') { handled(); activateSetting(); }
+    return;
+  }
+
+  const c = current();
+  switch (k) {
+    case 'Enter': handled(); playClip(c); break;
+    case 'c': handled(); saveClip(); break;
+    case 'y': handled(); copyClip(c); break;
+    case 'f': handled(); if (c) api.reveal(c.path).catch(err => say(errText(err), 'error')); break;
+    case 'o': handled(); if (c) api.play(c.path).catch(err => say(errText(err), 'error')); break;
+    case 'r': handled(); if (c) openCommand(`rename ${stem(c.name)}`, 7); break;
+    case 'd':
+      handled();
+      if (!c) break;
+      if (Date.now() - deleteArmed < 1500) { deleteArmed = 0; deleteClip(c); }
+      else { deleteArmed = Date.now(); say(`press d again to move ${stem(c.name)} to the Recycle Bin`); }
+      break;
+  }
+});
+
+// ---------------------------------------------------------------- mouse
+
+el.list.addEventListener('click', e => {
+  const row = e.target.closest('.row');
+  if (!row) return;
+  sel[view] = Number(row.dataset.i);
+  markSelection();
+});
+el.list.addEventListener('dblclick', e => {
+  if (!e.target.closest('.row')) return;
+  if (view === 'clips') playClip(current()); else activateSetting();
+});
+el.mode.addEventListener('click', () => {
+  if (commandMode) closeCommand();
+  else if (hotkeyMode) exitHotkeyMode();
+  else switchView();
+});
+el.video.addEventListener('click', togglePause);
+document.addEventListener('contextmenu', e => e.preventDefault());
+window.addEventListener('resize', setHints);
+
+// ---------------------------------------------------------------- start
+
+function tick() {
+  if (document.hidden) return;
+  refreshStatus();
+  if (++tick.n % 2 === 0) refreshClips();
+}
+tick.n = 0;
+
+document.addEventListener('visibilitychange', () => { if (!document.hidden) { refreshStatus(); refreshClips(); } });
+window.addEventListener('focus', () => refreshClips());
+
+(async () => {
+  try {
+    const loaded = await api.load();
+    config = loaded.config;
+    if (loaded.warnings?.length) say(`powerclip.ini: ${loaded.warnings[0]}`, 'error');
+  } catch (err) {
+    say(errText(err), 'error');
+  }
+  await Promise.all([refreshClips(), refreshStatus()]);
+  render();
+  requestAnimationFrame(() => api.ready());
+  setInterval(tick, 1000);
+})();

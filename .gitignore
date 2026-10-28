@@ -1,0 +1,18 @@
+# Build output
+/target
+/gen
+
+# Created next to the exe at runtime
+powerclip.ini
+*.log
+
+# Local tooling and notes
+/.claude/
+/todos.md
+.vscode/
+.idea/
+
+# OS clutter
+Thumbs.db
+desktop.ini
+.DS_Store

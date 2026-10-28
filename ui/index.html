@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PowerClip</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="main.js" defer></script>
+</head>
+<body class="clips">
+  <header id="top">
+    <span id="rec"></span>
+    <span id="usage"></span>
+  </header>
+
+  <main id="view">
+    <section id="player" hidden>
+      <video id="video" preload="metadata"></video>
+      <div id="playbar"><span id="clock"></span><span id="playname"></span></div>
+    </section>
+    <ol id="list" aria-label="Clips"></ol>
+    <div id="help" hidden></div>
+  </main>
+
+  <section id="live" hidden>
+    <span id="prompt" class="gutter">:</span>
+    <input id="input" spellcheck="false" autocomplete="off" aria-label="Command">
+    <div id="preview"></div>
+  </section>
+
+  <footer>
+    <button id="mode" tabindex="-1" title="Clips / settings (Tab)"></button>
+    <span id="info" role="status"></span>
+    <span id="hints"></span>
+  </footer>
+</body>
+</html>

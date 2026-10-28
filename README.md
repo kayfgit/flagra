@@ -1,0 +1,145 @@
+# PowerClip
+
+ShadowPlay-style instant replay for PCs that can't run ShadowPlay (no NVENC: GT 1030, GT 710, iGPU-less CPUs, ...).
+Press a hotkey, get the last N seconds as an `.mp4`.
+
+- Lives in the tray; default hotkey **Alt+F10**, saves the last **20 s** to `Videos\PowerClip`.
+- Records the screen and desktop audio, kept in sync (measured within ±10 ms).
+- The replay buffer lives in **RAM** (~25 MB at the default settings), so it doesn't write to disk constantly.
+  The disk is only touched when you save a clip.
+- Saving a clip takes no extra CPU: the buffer is already encoded, so it's just copied into an `.mp4`.
+
+## Requirements
+
+- Windows 10/11
+- `ffmpeg.exe` 6.1 or newer (needs `ddagrab`). Put it next to `powerclip.exe`, have it on `PATH`
+  (e.g. `scoop install ffmpeg`), or set `ffmpeg_path` in the settings.
+
+## Build
+
+```bash
+cargo build --release
+```
+
+The exe ends up at `target\release\powerclip.exe` (~3.2 MB, the GUI is embedded). Copy it anywhere.
+On first run it writes `powerclip.ini` next to itself. The GUI uses WebView2, which ships with Windows 11
+(and almost every Windows 10).
+
+## Use
+
+| | |
+|---|---|
+| Save a clip | hotkey (default `Alt+F10`), `c` in the window, or tray → *Save clip now* |
+| Open the window | double-click the tray icon, or start `powerclip.exe` again while it's running |
+| Something wrong? | `:log` in the window, or tray → *Open log* (ffmpeg's own errors go to `ffmpeg.log`) |
+
+## The window
+
+The recorder runs headless in the tray (~30 MB). The window is a **separate process**
+(`powerclip.exe --ui`) that only exists while it's open: closing it (Esc) ends the process and its
+WebView2, and recording carries on untouched. Open, it costs about 90 MB (WebView2 trimmed the same
+way as tradu, GPU off: that measured 50 MB lighter and no more CPU, even while playing clips).
+
+Everything is on the keyboard, in the same style as tradu:
+
+| Key | Clips | Settings |
+|---|---|---|
+| `↑ ↓` / `j k` | select | select |
+| `↵` | play here (again: pause) | change it (booleans toggle) |
+| `y` | copy the file: paste into Discord, a chat, a folder | |
+| `r` / `d d` | rename / move to the Recycle Bin | |
+| `f` / `o` | show in Explorer / open in your video player | |
+| `c` | save a clip now | |
+| `tab` | settings | clips |
+| `:` | command line | command line |
+| `?` / `esc` | help / close the window | help / close the window |
+
+While a clip plays: `space` pause, `← →` 5 s (Shift: 1 s), `, .` one frame, `m` mute, `esc` close.
+
+Settings change through commands, with a preview of what they'll do as you type:
+`:len 30`, `:fps 30`, `:res 720p`, `:bitrate 8m`, `:preset veryfast`, `:audio off` / `:audio 192`,
+`:hotkey` (then press the combo), `:monitor 1`, `:mouse`, `:priority below`, `:dir D:\Clips`,
+`:beep`, `:notify`, `:ffmpeg PATH`. Plus `:clip`, `:folder`, `:log`, `:ini`, `:start` / `:stop`
+(the background recorder) and `:help`.
+
+Only settings that change the encoding (fps, resolution, bitrate, preset, audio, monitor, cursor,
+priority, ffmpeg) restart capture, which starts the replay buffer over. The rest (hotkey, clip length,
+folder, beep, notification) apply instantly without losing what's buffered.
+
+You can also control it from the command line, e.g. to bind a mouse button or macro key:
+
+```bash
+powerclip.exe --clip
+```
+
+`powerclip.exe --quit` stops the running instance.
+
+To start it with Windows, put a shortcut to `powerclip.exe` in the `shell:startup` folder.
+
+## Settings (`powerclip.ini`)
+
+The window edits this file for you (keeping its comments). Editing it by hand works too: tray →
+*Edit powerclip.ini*, then tray → *Reload settings*.
+
+| Setting | Default | Notes |
+|---|---|---|
+| `hotkey` | `Alt+F10` | Modifiers `Ctrl` `Alt` `Shift` `Win` + one key (`A`-`Z`, `0`-`9`, `F1`-`F24`, `Home`, `PageUp`, `Numpad0`, ...) |
+| `clip_seconds` | `20` | Length of the saved clip (1-600). RAM use grows with this × bitrate. |
+| `fps` | `60` | `30` roughly halves the encoding cost. |
+| `resolution` | `native` | Or e.g. `1280x720`. Scaling happens on the GPU, and a lower resolution saves a lot of CPU. |
+| `video_bitrate_kbps` | `10000` | Quality and file size. Barely affects CPU. |
+| `preset` | `ultrafast` | x264 preset. Each step slower = better quality per bit, noticeably more CPU. |
+| `audio` | `true` | Desktop audio (whatever plays on the default output device; follows device switches). |
+| `audio_bitrate_kbps` | `160` | |
+| `monitor` | `0` | Which display to record. |
+| `draw_mouse` | `true` | |
+| `priority` | `below_normal` | Encoder CPU priority. `below_normal` = when the CPU is maxed, the clip stutters instead of your game. |
+| `output_dir` | *(Videos\PowerClip)* | |
+| `ffmpeg_path` | *(auto)* | |
+| `beep` / `notify` | `true` | Beep (audible in fullscreen games) and a tray notification on save. |
+
+### What it costs
+
+Measured on an i5-9400F (6 cores) + GT 1030, 1080p60, defaults:
+
+| | CPU (whole machine) | RAM |
+|---|---|---|
+| ffmpeg, idle desktop | ~10% | ~115 MB (about 70 MB of it is the GPU capture itself) |
+| ffmpeg, full-screen fast motion | ~15% | ~115 MB |
+| powerclip.exe (recorder) | ~0.1% | ~30 MB (includes the replay buffer) |
+| the window, only while open | ~0% idle | ~90 MB (≈165 MB while playing a clip) |
+
+If that's too much while gaming, try these in order: `fps = 30`, then `resolution = 1280x720`.
+
+## How it works
+
+```
+GPU:  Desktop Duplication (ddagrab) → pick freshest frame per slot → scale + RGB→NV12
+CPU:  x264 ultrafast ─┐
+WASAPI loopback ─AAC─┴→ MPEG-TS → powerclip.exe RAM ring (split at keyframes, 1/s)
+hotkey → copy the last N s of the ring → remux to .mp4 (no re-encode)
+```
+
+- **No hardware encoder** on these cards, so encoding is x264 on the CPU at the fastest preset.
+  Everything else (capture, scaling, colour conversion) stays on the GPU, so the CPU only
+  receives a ready-to-encode NV12 frame.
+- **Smooth capture on high-refresh monitors.** ddagrab paced at 60 fps waits only half a frame for new content,
+  so on a 120 Hz screen it often timed out and repeated a frame (~9% of frames measured). PowerClip polls at
+  500 Hz and lets ffmpeg's `fps` filter pick the newest frame for each 1/60 s slot (0 repeats measured).
+- **Audio sync.** ffmpeg can't capture desktop audio itself, so powerclip.exe captures it with WASAPI loopback
+  and pipes raw PCM in. Each audio packet is placed by its own hardware timestamp on a timeline that starts at
+  a known instant, and silence is filled in when nothing is playing (loopback sends no data then). The video's
+  first frame is pinned to the same instant through its wall-clock time.
+- **The 0.15 s audio shift.** ffmpeg pauses any input that runs more than 100 ms ahead of the others. Audio
+  naturally trails by about that much (buffering plus AAC framing), which kept pausing the video and dropping
+  frames. So audio is stamped 0.15 s later while recording, and the shift is undone when a clip is saved.
+  The side effect is that the last ~0.15 s of a clip has no audio.
+- If ffmpeg dies (crash, display mode change in a game), it's restarted automatically. It runs inside a
+  job object, so it never outlives PowerClip.
+
+## Known limits
+
+- Clips start on a keyframe (one per second), so a clip can be up to ~1 s longer than `clip_seconds`.
+- Exclusive-fullscreen games that block Desktop Duplication show up black. Borderless/windowed always works,
+  and most modern "fullscreen" modes do too.
+- Records one monitor; no microphone yet.

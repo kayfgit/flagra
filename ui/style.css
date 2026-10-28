@@ -1,0 +1,218 @@
+:root {
+  --bg: #0f0e0c;
+  --bar: #1c1a16;
+  --raise: #191714;
+  --rule: #2a2722;
+  --text: #e9e4d8;
+  --bright: #f7f3ea;
+  --label: #c9c2b3;
+  --muted: #9a9283;
+  --dim: #6f695f;
+  --amber: #f2a33a;
+  --on-amber: #1a1208;
+  --error: #ef7a62;
+  --mono: "JetBrains Mono", "JetBrainsMono Nerd Font", "JetBrainsMono NF", "Cascadia Mono", Consolas, monospace;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+[hidden] { display: none !important; }
+
+html, body { height: 100%; }
+
+body {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr);
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.55 var(--mono);
+  overflow: hidden;
+  user-select: none;
+  cursor: default;
+}
+
+::selection { background: var(--amber); color: var(--on-amber); }
+
+/* Recorder status, top line */
+
+#top {
+  display: flex;
+  gap: 24px;
+  padding: 12px 28px 10px;
+  font-size: 13px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+#rec b { color: var(--bright); font-weight: 500; }
+#rec .dot { color: var(--amber); margin-right: 8px; }
+#rec.off .dot, #rec.off b { color: var(--error); }
+#rec .sep, #usage .sep { color: var(--dim); margin: 0 8px; }
+#usage { margin-left: auto; }
+#usage b { color: var(--label); font-weight: 500; }
+
+/* Main area: the list, with the player above it while a clip plays */
+
+#view {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-top: 1px solid var(--rule);
+}
+
+#player {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 14px 28px 10px;
+  border-bottom: 1px solid var(--rule);
+}
+#video {
+  display: block;
+  max-width: 100%;
+  height: 46vh;
+  background: #000;
+  outline: none;
+}
+#playbar {
+  display: flex;
+  gap: 18px;
+  width: 100%;
+  padding-top: 8px;
+  font-size: 13px;
+  color: var(--muted);
+}
+#clock { color: var(--amber); }
+#playname { margin-left: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+#list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  list-style: none;
+  padding: 8px 0 12px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--rule) transparent;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: 5ch minmax(0, 1fr) 7ch 10ch 15ch;
+  column-gap: 16px;
+  align-items: baseline;
+  padding: 2px 28px 2px 24px;
+  border-left: 4px solid transparent;
+  white-space: nowrap;
+}
+.row > * { overflow: hidden; text-overflow: ellipsis; }
+.row .n { color: var(--dim); text-align: right; }
+.row .name { color: var(--text); }
+.row .dur, .row .size, .row .when { color: var(--muted); text-align: right; }
+.row.sel { background: var(--raise); border-left-color: var(--amber); }
+.row.sel .n { color: var(--amber); }
+.row.sel .name { color: var(--bright); }
+.row.playing .name::after { content: "  ▶"; color: var(--amber); }
+
+/* Settings reuse the row: label, value, the command that changes it */
+body.settings .row { grid-template-columns: 18ch minmax(0, 1fr) auto; }
+.row .label { color: var(--muted); }
+.row .value { color: var(--text); }
+.row .value .note { color: var(--muted); }
+.row .cmd { color: var(--dim); }
+.row.sel .label { color: var(--label); }
+.row.sel .value { color: var(--amber); }
+
+.empty {
+  padding: 18px 28px;
+  color: var(--muted);
+  white-space: normal;
+  line-height: 1.7;
+}
+.empty b { color: var(--bright); font-weight: 500; }
+
+#help {
+  overflow-y: auto;
+  padding: 14px 28px;
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0 24px;
+  align-content: start;
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+#help b { color: var(--bright); font-weight: 500; }
+#help .head { grid-column: 1 / -1; margin-top: 10px; color: var(--label); }
+#help .head:first-child { margin-top: 0; }
+
+/* Command line, shown while typing a : command */
+
+#live {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: 12px;
+  margin: 0 28px;
+  padding: 12px 0 14px;
+  border-top: 1px solid var(--rule);
+}
+.gutter { color: var(--amber); font-weight: 700; }
+#input {
+  width: 100%;
+  border: 0;
+  outline: none;
+  background: none;
+  color: var(--bright);
+  font: inherit;
+  user-select: text;
+}
+#preview { grid-column: 2; color: var(--muted); }
+#preview.error { color: var(--error); }
+#preview.ok { color: var(--amber); }
+
+/* Status bar */
+
+footer {
+  display: flex;
+  align-items: stretch;
+  height: 34px;
+  background: var(--bar);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+#mode {
+  min-width: 11ch;
+  padding: 0 14px;
+  border: 0;
+  background: var(--amber);
+  color: var(--on-amber);
+  font: 700 13px var(--mono);
+  cursor: pointer;
+}
+
+#info {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 0 16px;
+  line-height: 34px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--label);
+}
+#info.error { color: var(--error); }
+#info.done { color: var(--amber); }
+
+#hints {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 0 18px;
+  color: var(--muted);
+}
+#hints b { color: var(--bright); font-weight: 500; margin-right: 6px; }
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; }
+}
