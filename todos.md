@@ -13,4 +13,4 @@ done todos get erased shortly after.
 
 [x] - start with windows, so it records after a reboot without opening it
 [x] - any resolution other than native made ffmpeg fail to start (wrong scale_d3d11 option names); the window now shows ffmpeg's actual error
-[] - check the installer's ffmpeg download on a pc that doesn't have ffmpeg yet
+[x] - check the installer's ffmpeg download on a pc that doesn't have ffmpeg yet (no download anymore: flagra ships its own 7 MB ffmpeg)
