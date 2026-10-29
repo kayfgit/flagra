@@ -38,7 +38,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use crate::config::{self, Config, Priority};
-use crate::{hotkey, recorder, util::wide, CLASS, WM_LEVELS, WM_REMOTE_CLIP, WM_REMOTE_QUIT, WM_REMOTE_RELOAD, WM_STATUS};
+use crate::{hotkey, recorder, util::wide, CLASS, WM_LEVELS, WM_POPUP_TEST, WM_REMOTE_CLIP, WM_REMOTE_QUIT, WM_REMOTE_RELOAD, WM_STATUS};
 
 const CF_HDROP: u32 = 15;
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -46,7 +46,7 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 /// Settings the GUI may change, in the order it shows them.
 const KEYS: &[&str] = &[
     "hotkey", "open_hotkey", "clip_seconds", "fps", "resolution", "video_bitrate_kbps", "preset", "audio", "desktop_volume", "mic", "mic_volume",
-    "audio_bitrate_kbps", "monitor", "draw_mouse", "priority", "output_dir", "ffmpeg_path", "beep", "notify", "start_with_windows", "keep_window_ready",
+    "audio_bitrate_kbps", "monitor", "draw_mouse", "priority", "output_dir", "ffmpeg_path", "beep", "popup", "popup_position", "notify", "start_with_windows", "keep_window_ready",
 ];
 
 struct CpuSample {
@@ -111,7 +111,7 @@ pub fn run(dir: PathBuf, hidden: bool) {
         .invoke_handler(tauri::generate_handler![
             ready, close, quit, minimize, move_window, resize_window, save_placement, reset_placement, toggle_fullscreen,
             load, status, levels, set_setting, list_clips, save_clip, delete_clip, rename_clip, copy_clip, reveal, play,
-            open_special, start_recorder, stop_recorder,
+            open_special, start_recorder, stop_recorder, test_popup,
         ])
         .run(tauri::generate_context!())
         .expect("error while running the flagra window");
@@ -325,6 +325,8 @@ fn config_json(c: &Config) -> Value {
         "ffmpeg_path": c.ffmpeg_path.as_ref().map(|p| p.to_string_lossy().into_owned()),
         "beep": c.beep,
         "notify": c.notify,
+        "popup": c.popup,
+        "popup_position": c.popup_position.name(),
         "keep_window_ready": c.keep_window_ready,
         "start_with_windows": c.start_with_windows,
     })
@@ -708,6 +710,13 @@ fn start_recorder() -> Result<(), String> {
         .spawn()
         .map(|_| ())
         .map_err(|e| format!("cannot start the recorder: {}", e))
+}
+
+/// Shows a sample of the clip-saved popup, where clips would show it.
+#[tauri::command]
+fn test_popup() -> Result<(), String> {
+    let h = recorder_window().ok_or("flagra isn't recording (:start starts it)")?;
+    unsafe { PostMessageW(Some(h), WM_POPUP_TEST, WPARAM(0), LPARAM(0)) }.map_err(|e| e.to_string())
 }
 
 #[tauri::command]

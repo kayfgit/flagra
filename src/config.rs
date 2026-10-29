@@ -23,6 +23,36 @@ impl Priority {
     }
 }
 
+/// Where the clip-saved popup appears, on the screen the game is on.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Corner {
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+}
+
+impl Corner {
+    pub fn parse(s: &str) -> Option<Corner> {
+        Some(match s.to_ascii_lowercase().replace([' ', '_'], "-").as_str() {
+            "top-left" => Corner::TopLeft,
+            "top-right" => Corner::TopRight,
+            "bottom-left" => Corner::BottomLeft,
+            "bottom-right" => Corner::BottomRight,
+            _ => return None,
+        })
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Corner::TopLeft => "top-left",
+            Corner::TopRight => "top-right",
+            Corner::BottomLeft => "bottom-left",
+            Corner::BottomRight => "bottom-right",
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Config {
     pub hotkey: String,
@@ -50,6 +80,10 @@ pub struct Config {
     /// None = the ffmpeg bundled with flagra (or one next to flagra.exe, or on PATH).
     pub ffmpeg_path: Option<PathBuf>,
     pub beep: bool,
+    /// flagra's own popup when a clip is saved (works over games), and where.
+    pub popup: bool,
+    pub popup_position: Corner,
+    /// A Windows notification too.
     pub notify: bool,
     pub start_with_windows: bool,
     /// Keep the window's process running hidden after closing, so it opens instantly.
@@ -81,7 +115,9 @@ impl Default for Config {
             output_dir: None,
             ffmpeg_path: None,
             beep: true,
-            notify: true,
+            popup: true,
+            popup_position: Corner::TopRight,
+            notify: false,
             start_with_windows: true,
             keep_window_ready: false,
             window_position: None,
@@ -146,9 +182,12 @@ output_dir =
 # Path to ffmpeg.exe. Empty = the one that comes with flagra (or one next to flagra.exe, or on PATH).
 ffmpeg_path =
 
-# Beep when a clip is saved (works in fullscreen games), and show a notification.
+# When a clip is saved: beep, flagra's popup in a corner of the screen the game is on
+# (top-left, top-right, bottom-left, bottom-right), and/or a Windows notification.
 beep = true
-notify = true
+popup = true
+popup_position = top-right
+notify = false
 
 # Start flagra (recording in the tray) when you log in to Windows.
 start_with_windows = true
@@ -282,6 +321,11 @@ pub fn parse(text: &str) -> (Config, Vec<String>) {
             "draw_mouse" => boolean(val, &mut c.draw_mouse, &mut bad),
             "beep" => boolean(val, &mut c.beep, &mut bad),
             "notify" => boolean(val, &mut c.notify, &mut bad),
+            "popup" => boolean(val, &mut c.popup, &mut bad),
+            "popup_position" => match Corner::parse(val) {
+                Some(corner) => c.popup_position = corner,
+                None => bad("expected top-left, top-right, bottom-left or bottom-right"),
+            },
             "start_with_windows" => boolean(val, &mut c.start_with_windows, &mut bad),
             "keep_window_ready" => boolean(val, &mut c.keep_window_ready, &mut bad),
             "priority" => {

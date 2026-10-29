@@ -5,6 +5,7 @@ mod autostart;
 mod config;
 mod hotkey;
 mod logging;
+mod popup;
 mod recorder;
 mod ts;
 mod ui;
@@ -43,6 +44,8 @@ pub const WM_REMOTE_RELOAD: u32 = WM_APP + 5;
 pub const WM_STATUS: u32 = WM_APP + 6;
 /// From the GUI: returns (desktop peak << 16) | mic peak since the last ask; 16384 = full scale.
 pub const WM_LEVELS: u32 = WM_APP + 7;
+/// From the GUI: show a sample popup where clips would show it (:popup test).
+pub const WM_POPUP_TEST: u32 = WM_APP + 8;
 const HOTKEY_ID: i32 = 1;
 const OPEN_HOTKEY_ID: i32 = 2;
 
@@ -117,6 +120,8 @@ fn main() {
         std::mem::forget(_mutex);
     }
     logging::init(&dir.join("flagra.log"));
+    // Crisp popups on scaled displays (they size themselves per monitor).
+    unsafe { let _ = windows::Win32::UI::HiDpi::SetProcessDpiAwarenessContext(windows::Win32::UI::HiDpi::DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2); }
 
     let cfg_path = dir.join("flagra.ini");
     let (cfg, warnings) = config::load(&cfg_path);
@@ -198,8 +203,20 @@ unsafe extern "system" fn wndproc(h: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
         }
         WM_NOTE => {
             if let Some((title, text, err)) = app().note.lock().unwrap().take() {
-                notify(&title, &text, err);
+                let cfg = app().cfg.lock().unwrap().clone();
+                if cfg.popup {
+                    popup::show(&title, &text, err, cfg.popup_position);
+                }
+                // A failure is never silent: without the popup it still gets a notification.
+                if cfg.notify || (err && !cfg.popup) {
+                    notify(&title, &text, err);
+                }
             }
+        }
+        WM_POPUP_TEST => {
+            let cfg = app().cfg.lock().unwrap().clone();
+            let text = format!("preview · {} saves a clip", cfg.hotkey);
+            popup::show("Clip saved", &text, false, cfg.popup_position);
         }
         WM_TRAY => match lp.0 as u32 {
             WM_RBUTTONUP | WM_CONTEXTMENU => show_menu(h),
@@ -242,8 +259,8 @@ fn save_clip() {
                 if cfg.beep {
                     unsafe { let _ = MessageBeep(MB_OK); }
                 }
-                let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                cfg.notify.then(|| (format!("Saved last {:.0}s", secs), name, false))
+                let name = path.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                Some(("Clip saved".to_string(), format!("last {:.0} s · {}", secs, name), false))
             }
             Err(e) => {
                 log!("clip failed: {}", e);

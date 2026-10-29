@@ -143,7 +143,9 @@ The window edits this file for you (keeping its comments). Editing it by hand wo
 | `priority` | `below_normal` | Encoder CPU priority. `below_normal` = when the CPU is maxed, the clip stutters instead of your game. |
 | `output_dir` | *(Videos\flagra)* | |
 | `ffmpeg_path` | *(auto)* | |
-| `beep` / `notify` | `true` | Beep (audible in fullscreen games) and a tray notification on save. |
+| `beep` | `true` | Beep on save (audible in fullscreen games). |
+| `popup` / `popup_position` | `true` / `top-right` | flagra's own *clip saved* popup, ShadowPlay-style, in a corner of the screen the game is on. It never takes focus and clicks go through it. `:popup test` previews it. |
+| `notify` | `false` | A Windows notification on save as well. |
 | `keep_window_ready` | `false` | Keep the window hidden in the background after closing, so it opens instantly (~85 MB while closed). |
 | `start_with_windows` | `true` | Starts flagra when you log in (a per-user Run entry; Task Manager's Startup apps switch still applies). |
 

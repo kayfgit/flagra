@@ -28,6 +28,7 @@ function tauriApi() {
     load: () => invoke('load'),
     status: () => invoke('status'),
     levels: () => invoke('levels'),
+    testPopup: () => invoke('test_popup'),
     set: (key, value) => invoke('set_setting', { key, value: String(value) }),
     clips: () => invoke('list_clips'),
     saveClip: () => invoke('save_clip'),
@@ -56,7 +57,7 @@ function browserApi() {
     hotkey: 'Alt+F10', open_hotkey: 'Alt+F9', clip_seconds: 20, fps: 60, resolution: 'native', video_bitrate_kbps: 10000,
     preset: 'ultrafast', audio: true, desktop_volume: 100, mic: false, mic_volume: 100, audio_bitrate_kbps: 160, monitor: 0, draw_mouse: true,
     priority: 'below_normal', output_dir: 'C:\\Users\\you\\Videos\\flagra', output_dir_custom: false,
-    ffmpeg_path: null, beep: true, notify: true, start_with_windows: true, keep_window_ready: false,
+    ffmpeg_path: null, beep: true, popup: true, popup_position: 'top-right', notify: false, start_with_windows: true, keep_window_ready: false,
   };
   const capture = new Set(['fps', 'resolution', 'video_bitrate_kbps', 'preset', 'audio', 'audio_bitrate_kbps',
     'monitor', 'draw_mouse', 'priority', 'ffmpeg_path']);
@@ -66,6 +67,7 @@ function browserApi() {
     fullscreen: async () => !document.fullscreenElement,
     load: async () => ({ config, warnings: [], cpus: 6 }),
     status: async () => ({ running: true, recording: true, buffered: 22.8, cpu: 9 + Math.random() * 3, mem_mb: 113 }),
+    testPopup: async () => {},
     levels: async () => [Math.random() * 0.6, config.mic ? Math.random() * 1.1 : 0],
     set: async (key, value) => {
       const bool = typeof config[key] === 'boolean';
@@ -105,6 +107,7 @@ let lastStatus = null;
 
 const CAPTURE_KEYS = new Set(['fps', 'resolution', 'video_bitrate_kbps', 'preset',
   'audio_bitrate_kbps', 'monitor', 'draw_mouse', 'priority', 'ffmpeg_path']);
+const CORNERS = ['top-left', 'top-right', 'bottom-left', 'bottom-right'];
 const PRESETS = ['ultrafast', 'superfast', 'veryfast', 'faster', 'fast', 'medium'];
 const PRIORITIES = { idle: 'idle', below: 'below_normal', below_normal: 'below_normal', normal: 'normal',
   above: 'above_normal', above_normal: 'above_normal' };
@@ -198,7 +201,11 @@ const SETTINGS = [
     value: c => [c.output_dir, c.output_dir_custom ? '' : ' (default)'],
   },
   { key: 'beep', label: 'beep on save', cmd: 'beep', bool: true, value: c => (c.beep ? 'on' : 'off') },
-  { key: 'notify', label: 'notification', cmd: 'notify', bool: true, value: c => (c.notify ? 'on' : 'off') },
+  {
+    key: 'popup', label: 'popup on save', cmd: 'popup', bool: true,
+    value: c => (c.popup ? ['on', ` · ${c.popup_position.replace('-', ' ')} · :popup test shows it`] : 'off'),
+  },
+  { key: 'notify', label: 'notification', cmd: 'notify', bool: true, value: c => (c.notify ? ['on', ' · a Windows one'] : 'off') },
   {
     key: 'start_with_windows', label: 'start with Windows', cmd: 'autostart', bool: true,
     value: c => (c.start_with_windows ? ['on', ' · records from the moment you log in'] : 'off'),
@@ -728,6 +735,24 @@ const COMMANDS = {
   mouse: onOff('draw_mouse', 'mouse cursor', v => (v ? 'shown' : 'hidden')),
   beep: onOff('beep', 'beep on save', v => (v ? 'on' : 'off')),
   notify: onOff('notify', 'notification on save', v => (v ? 'on' : 'off')),
+  popup: arg => attempt(() => {
+    if (/^test$/i.test(arg ?? '')) {
+      return { label: 'show the popup where clips will show it', run: () => api.testPopup().catch(err => say(errText(err), 'error')) };
+    }
+    const corner = (arg ?? '').toLowerCase().replace(/[ _]/g, '-');
+    if (CORNERS.includes(corner)) {
+      return {
+        label: `popup in the ${corner.replace('-', ' ')} corner · applies right away`,
+        run: async () => {
+          await applySetting('popup_position', corner);
+          if (!config.popup) await applySetting('popup', true);
+          api.testPopup().catch(() => {});
+        },
+      };
+    }
+    const v = bool(arg, config.popup);
+    return change('popup', v, `popup on save ${config.popup ? 'on' : 'off'} → ${v ? 'on' : 'off'}`);
+  }),
   autostart: onOff('start_with_windows', 'start with Windows', v => (v ? 'on' : 'off')),
   keepready: onOff('keep_window_ready', 'open instantly', v => (v ? 'on' : 'off')),
   priority: arg => (!arg ? { label: `idle, below, normal or above (now ${priorityLabel(config.priority)})` } : attempt(() => {
@@ -882,7 +907,8 @@ function showHelp() {
     [':hotkey', 'press a new combo for saving clips'], [':openkey', 'press a new combo for opening flagra (:openkey off)'],
     [':monitor 1', 'which display'], [':mouse', 'show / hide the cursor'],
     [':priority below', 'encoder priority'], [':dir D:\\Clips', 'clips folder (:dir reset)'],
-    [':beep  :notify', 'toggle feedback on save'], [':autostart', 'toggle starting with Windows'],
+    [':popup', 'the popup on save: on, off, test, or a corner like bottom-left'],
+    [':beep  :notify', 'toggle the beep / the Windows notification on save'], [':autostart', 'toggle starting with Windows'],
     [':keepready', 'keep the window ready so it opens instantly (uses memory while closed)'], [':ffmpeg PATH', 'ffmpeg.exe to use (:ffmpeg auto)'],
     [':rename  :delete  :copy', 'act on the selected clip'],
     [':folder  :log  :ini', 'open the clips folder, the log, the settings file'],
