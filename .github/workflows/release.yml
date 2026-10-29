@@ -26,6 +26,11 @@ jobs:
             throw "tauri.conf.json says $version but the tag is $env:GITHUB_REF_NAME"
           }
 
+      # Before building anything: every release needs its CHANGELOG.md section.
+      - name: Release notes from the changelog
+        shell: pwsh
+        run: ./.github/release-notes.ps1 $env:GITHUB_REF_NAME.TrimStart('v') notes.md
+
       - name: Fetch the bundled ffmpeg
         shell: pwsh
         run: ./ffmpeg/fetch.ps1
@@ -51,16 +56,4 @@ jobs:
           Copy-Item ffmpeg/dist/ffmpeg.exe, ffmpeg/dist/README.txt portable/ffmpeg/
           Copy-Item ffmpeg/dist/COPYING.GPLv2 portable/ffmpeg/COPYING.GPLv2.txt
           Compress-Archive portable/* flagra-portable.zip
-          $notes = @"
-          ## Install
-
-          Paste into PowerShell. It installs for your user (no admin) and starts flagra:
-
-          ``````powershell
-          irm https://raw.githubusercontent.com/kayfgit/flagra/main/install.ps1 | iex
-          ``````
-
-          Or download **flagra-setup.exe** below, or **flagra-portable.zip** to run it from any folder without installing.
-          Both come with the ffmpeg flagra needs. Then press **Alt+F10** to save the last 20 seconds.
-          "@
-          gh release create $tag flagra-setup.exe flagra-portable.zip --title "flagra $tag" --notes $notes
+          gh release create $tag flagra-setup.exe flagra-portable.zip --title "flagra $tag" --notes-file notes.md

@@ -47,7 +47,8 @@ npx @tauri-apps/cli@2 build --config tauri.bundle.conf.json
 
 To try changes before releasing them, `.\install-local.ps1` does both, installs the result where the
 one-liner does (settings kept), and restarts flagra. Pushing a `v*` tag makes GitHub Actions build the
-installer and the portable zip and publish a release.
+installer and the portable zip and publish a release. The release notes are that version's section of
+[CHANGELOG.md](CHANGELOG.md) (new entries go under *Unreleased*); the release stops if it has none.
 
 ### The bundled ffmpeg
 
