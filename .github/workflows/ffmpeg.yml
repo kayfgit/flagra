@@ -51,6 +51,10 @@ jobs:
           foreach ($need in 'ddagrab', 'scale_d3d11', 'hwdownload', 'libx264', ' aac ', ' mp4 ', ' mpegts ') {
             if ($lists -notmatch [regex]::Escape($need)) { throw "missing $need" }
           }
+          $info = [Diagnostics.FileVersionInfo]::GetVersionInfo($ff)
+          if ($info.FileDescription -ne 'flagra recorder (ffmpeg)' -or $info.ProductName -ne 'flagra') {
+            throw "not branded: '$($info.FileDescription)' / '$($info.ProductName)'"
+          }
           $pcm = [byte[]]::new(48000 * 8 * 2)  # 2 s of f32 stereo silence
           [IO.File]::WriteAllBytes("$PWD/a.raw", $pcm)
           & $ff -hide_banner -loglevel error -f f32le -ar 48000 -ac 2 -i a.raw -c:a aac -b:a 160k -f mpegts a.ts

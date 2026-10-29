@@ -61,6 +61,40 @@ tar -xf "$x264_src" -C x264 --strip-components=1
     --enable-muxer=mpegts,mp4 \
     --enable-bsf=aac_adtstoasc,h264_mp4toannexb \
     --enable-protocol=file,pipe
+  # flagra's icon and name, so Task Manager shows "flagra recorder (ffmpeg)"
+  # instead of an anonymous ffmpeg.exe someone might end as a stray process.
+  # fftoolsres.rc (only a manifest upstream) is built whenever windres exists.
+  grep -q '^HAVE_GNU_WINDRES=yes' ffbuild/config.mak || { echo "no windres: can't brand ffmpeg.exe" >&2; exit 1; }
+  cp "$here/../icons/icon.ico" fftools/flagra.ico
+  fileversion="$(echo "$FFMPEG_VERSION" | tr . ,),$BUILD"
+  cat >> fftools/fftoolsres.rc <<EOF
+1 ICON "flagra.ico"
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION $fileversion
+PRODUCTVERSION $fileversion
+FILEOS 0x40004
+FILETYPE 0x1
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904b0"
+    BEGIN
+      VALUE "CompanyName", "flagra"
+      VALUE "FileDescription", "flagra recorder (ffmpeg)"
+      VALUE "FileVersion", "$FFMPEG_VERSION-$BUILD"
+      VALUE "InternalName", "ffmpeg"
+      VALUE "LegalCopyright", "FFmpeg and x264 developers, GPL v2 or later"
+      VALUE "OriginalFilename", "ffmpeg.exe"
+      VALUE "ProductName", "flagra"
+      VALUE "ProductVersion", "$FFMPEG_VERSION-$BUILD"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x409, 1200
+  END
+END
+EOF
   make -j"$jobs"
   "$host-strip" -o "$out/ffmpeg.exe" ffmpeg.exe
   cp COPYING.GPLv2 "$out/COPYING.GPLv2"
@@ -69,7 +103,8 @@ tar -xf "$x264_src" -C x264 --strip-components=1
 cp "$work/$ffmpeg_src" "$work/$x264_src" "$here/build.sh" "$here/version.env" "$out/"
 cat > "$out/README.txt" <<EOF
 This folder holds ffmpeg $FFMPEG_VERSION with x264, built for flagra with only the
-parts flagra uses (see build.sh). flagra runs it as a separate program.
+parts flagra uses (see build.sh). flagra runs it as a separate program, which is
+why Task Manager lists it on its own, as "flagra recorder (ffmpeg)".
 
 ffmpeg and x264 are free software under the GNU General Public License, version 2
 or later: see COPYING.GPLv2. The exact source code this ffmpeg.exe was built from,
