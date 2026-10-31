@@ -16,10 +16,10 @@ Each release's notes on GitHub are its section below. Add new entries under
 
 ### Bug Fixes
 
-* clips no longer freeze on one frame while a game keeps the GPU busy: capture gets GPU priority over the game, and if it still falls behind real time it restarts instead of staying frozen while audio piles up in memory
-* holding d in the clip list no longer sends clip after clip to the Recycle Bin; a held key now counts as one press, and tapping d can't delete several clips in a row
-* the hotkeys now work in games that switch off other programs' hotkeys while they're focused, by also reading the raw keyboard feed
-* a hotkey another program holds no longer goes dead until flagra restarts: it still works, and flagra keeps asking for it until it's free
+* clips no longer freeze on one frame while a game keeps the GPU busy: capture gets GPU priority over the game, and if it still falls behind real time it restarts instead of staying frozen while audio piles up in memory ([ddded6a](https://github.com/kayfgit/flagra/commit/ddded6a))
+* holding d in the clip list no longer sends clip after clip to the Recycle Bin; a held key now counts as one press, and tapping d can't delete several clips in a row ([ddded6a](https://github.com/kayfgit/flagra/commit/ddded6a))
+* the hotkeys now work in games that switch off other programs' hotkeys while they're focused, by also reading the raw keyboard feed ([ddded6a](https://github.com/kayfgit/flagra/commit/ddded6a))
+* a hotkey another program holds no longer goes dead until flagra restarts: it still works, and flagra keeps asking for it until it's free ([ddded6a](https://github.com/kayfgit/flagra/commit/ddded6a))
 
 ## [0.2.0](https://github.com/kayfgit/flagra/compare/v0.1.0...v0.2.0) (2026-10-28)
 
