@@ -14,6 +14,7 @@ mod util;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Instant;
 
 use windows::core::{w, PCWSTR, PWSTR};
 use windows::Win32::Foundation::{CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, HWND, LPARAM, LRESULT, POINT, WPARAM};
@@ -23,6 +24,10 @@ use windows::Win32::System::Threading::{
     CreateMutexW, OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{RegisterHotKey, UnregisterHotKey};
+use windows::Win32::UI::Input::{
+    GetRawInputData, RegisterRawInputDevices, HRAWINPUT, RAWINPUT, RAWINPUTDEVICE, RAWINPUTHEADER, RIDEV_INPUTSINK,
+    RID_INPUT, RIM_TYPEKEYBOARD,
+};
 use windows::Win32::UI::Shell::{
     FOLDERID_Videos, SHGetKnownFolderPath, ShellExecuteW, Shell_NotifyIconW, KNOWN_FOLDER_FLAG, NIF_ICON,
     NIF_INFO, NIF_MESSAGE, NIF_TIP, NIIF_ERROR, NIIF_INFO, NIM_ADD, NIM_DELETE, NIM_MODIFY, NOTIFYICONDATAW,
@@ -48,6 +53,10 @@ pub const WM_LEVELS: u32 = WM_APP + 7;
 pub const WM_POPUP_TEST: u32 = WM_APP + 8;
 const HOTKEY_ID: i32 = 1;
 const OPEN_HOTKEY_ID: i32 = 2;
+/// Where each hotkey sits in App::keys.
+const HOTKEYS: [i32; 2] = [HOTKEY_ID, OPEN_HOTKEY_ID];
+const HOTKEY_RETRY_TIMER: usize = 1;
+const HOTKEY_RETRY_MS: u32 = 5000;
 
 const ID_OPEN: usize = 6;
 const ID_SAVE: usize = 1;
@@ -67,6 +76,9 @@ struct App {
     taskbar_created: AtomicU32,
     /// Notification waiting to be shown on the UI thread: (title, text, is_error).
     note: Mutex<Option<(String, String, bool)>>,
+    keys: Mutex<hotkey::Keys<{ HOTKEYS.len() }>>,
+    /// Hotkeys another program held when we asked: (id, combo), retried on a timer.
+    taken: Mutex<Vec<(i32, String)>>,
 }
 
 static APP: OnceLock<App> = OnceLock::new();
@@ -145,6 +157,8 @@ fn main() {
         hwnd: AtomicIsize::new(0),
         taskbar_created: AtomicU32::new(0),
         note: Mutex::new(None),
+        keys: Mutex::new(hotkey::Keys::new()),
+        taken: Mutex::new(Vec::new()),
     });
 
     unsafe {
@@ -168,6 +182,7 @@ fn main() {
 
         add_tray_icon();
         register_hotkeys();
+        watch_raw_keyboard();
         if !warnings.is_empty() {
             notify("flagra settings", &format!("{} (see flagra.log)", warnings[0]), true);
         }
@@ -187,8 +202,16 @@ fn main() {
 
 unsafe extern "system" fn wndproc(h: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     match msg {
-        WM_HOTKEY if wp.0 as i32 == HOTKEY_ID => save_clip(),
-        WM_HOTKEY if wp.0 as i32 == OPEN_HOTKEY_ID => toggle_ui(),
+        WM_HOTKEY => {
+            if let Some(i) = HOTKEYS.iter().position(|&id| id == wp.0 as i32) {
+                hotkey_pressed(i);
+            }
+        }
+        WM_TIMER if wp.0 == HOTKEY_RETRY_TIMER => retry_hotkeys(),
+        WM_INPUT => {
+            on_raw_input(HRAWINPUT(lp.0 as _));
+            return DefWindowProcW(h, msg, wp, lp); // it cleans up after WM_INPUT
+        }
         WM_REMOTE_CLIP => save_clip(),
         WM_REMOTE_QUIT => PostQuitMessage(0),
         WM_REMOTE_RELOAD => reload(wp.0 != 0),
@@ -241,6 +264,50 @@ unsafe extern "system" fn wndproc(h: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
         _ => return DefWindowProcW(h, msg, wp, lp),
     }
     LRESULT(0)
+}
+
+fn hotkey_pressed(i: usize) {
+    if !app().keys.lock().unwrap().first_report(i, Instant::now()) {
+        return;
+    }
+    match HOTKEYS[i] {
+        HOTKEY_ID => save_clip(),
+        _ => toggle_ui(),
+    }
+}
+
+/// Keeps keyboard events coming while other programs are focused, for hotkey::Keys.
+unsafe fn watch_raw_keyboard() {
+    let device = RAWINPUTDEVICE {
+        usUsagePage: 0x01, // generic desktop
+        usUsage: 0x06,     // keyboard
+        dwFlags: RIDEV_INPUTSINK,
+        hwndTarget: hwnd(),
+    };
+    if let Err(e) = RegisterRawInputDevices(&[device], std::mem::size_of::<RAWINPUTDEVICE>() as u32) {
+        log!("cannot watch the keyboard, hotkeys may not work in some games: {}", e);
+    }
+}
+
+unsafe fn on_raw_input(input: HRAWINPUT) {
+    let mut raw = RAWINPUT::default();
+    let mut size = std::mem::size_of::<RAWINPUT>() as u32;
+    let read = GetRawInputData(
+        input,
+        RID_INPUT,
+        Some(&mut raw as *mut _ as *mut _),
+        &mut size,
+        std::mem::size_of::<RAWINPUTHEADER>() as u32,
+    );
+    if read == u32::MAX || raw.header.dwType != RIM_TYPEKEYBOARD.0 {
+        return;
+    }
+    let key = raw.data.keyboard;
+    let up = key.Flags as u32 & RI_KEY_BREAK != 0;
+    let pressed = app().keys.lock().unwrap().key(key.VKey as u32, up, hotkey::mods_down());
+    if let Some(i) = pressed {
+        hotkey_pressed(i);
+    }
 }
 
 fn save_clip() {
@@ -375,20 +442,44 @@ fn register_hotkeys() {
     };
     let mut taken = Vec::new();
     unsafe {
-        for (id, combo) in [(HOTKEY_ID, Some(clip)), (OPEN_HOTKEY_ID, open)] {
+        let _ = KillTimer(Some(hwnd()), HOTKEY_RETRY_TIMER);
+        for (i, combo) in [Some(clip), open].into_iter().enumerate() {
+            let id = HOTKEYS[i];
             let _ = UnregisterHotKey(Some(hwnd()), id);
+            app().keys.lock().unwrap().set(i, None);
             let Some(combo) = combo else { continue };
             let Ok((mods, vk)) = hotkey::parse(&combo) else { continue };
+            // A taken hotkey still works: the raw keyboard feed sees it anyway.
+            app().keys.lock().unwrap().set(i, Some((mods, vk)));
             if RegisterHotKey(Some(hwnd()), id, mods, vk).is_err() {
                 log!("hotkey {} is already taken by another program", combo);
-                taken.push(combo);
+                taken.push((id, combo));
             } else {
                 log!("hotkey {} registered", combo);
             }
         }
     }
     if !taken.is_empty() {
-        notify("flagra", &format!("{} is used by another program. Pick another in settings.", taken.join(" and ")), true);
+        let names: Vec<&str> = taken.iter().map(|(_, combo)| combo.as_str()).collect();
+        notify("flagra", &format!("{} is also used by another program, so it may do both. You can pick another in settings.", names.join(" and ")), true);
+        // Often it's only for a moment, like another program starting up.
+        unsafe { SetTimer(Some(hwnd()), HOTKEY_RETRY_TIMER, HOTKEY_RETRY_MS, None); }
+    }
+    *app().taken.lock().unwrap() = taken;
+}
+
+fn retry_hotkeys() {
+    let mut taken = app().taken.lock().unwrap();
+    taken.retain(|(id, combo)| {
+        let Ok((mods, vk)) = hotkey::parse(combo) else { return false };
+        let free = unsafe { RegisterHotKey(Some(hwnd()), *id, mods, vk) }.is_ok();
+        if free {
+            log!("hotkey {} registered", combo);
+        }
+        !free
+    });
+    if taken.is_empty() {
+        unsafe { let _ = KillTimer(Some(hwnd()), HOTKEY_RETRY_TIMER); }
     }
 }
 

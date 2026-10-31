@@ -14,6 +14,13 @@ Each release's notes on GitHub are its section below. Add new entries under
 
 * Windows notifications on save are off by default for new installs, now that the popup does that job ([c303790](https://github.com/kayfgit/flagra/commit/c303790))
 
+### Bug Fixes
+
+* clips no longer freeze on one frame while a game keeps the GPU busy: capture gets GPU priority over the game, and if it still falls behind real time it restarts instead of staying frozen while audio piles up in memory
+* holding d in the clip list no longer sends clip after clip to the Recycle Bin; a held key now counts as one press, and tapping d can't delete several clips in a row
+* the hotkeys now work in games that switch off other programs' hotkeys while they're focused, by also reading the raw keyboard feed
+* a hotkey another program holds no longer goes dead until flagra restarts: it still works, and flagra keeps asking for it until it's free
+
 ## [0.2.0](https://github.com/kayfgit/flagra/compare/v0.1.0...v0.2.0) (2026-10-28)
 
 ### Features

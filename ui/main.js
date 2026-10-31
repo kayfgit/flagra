@@ -102,12 +102,14 @@ let windowMode = null;           // 'move' | 'resize' while placing the window w
 let fullscreen = false;
 let helpOpen = false;
 let deleteArmed = 0;             // time of the first d of dd
+let deleteQuietUntil = 0;        // d does nothing until this time, after a dd
 let awaitingClip = 0;            // time we asked the recorder for a clip
 let lastStatus = null;
 
 const CAPTURE_KEYS = new Set(['fps', 'resolution', 'video_bitrate_kbps', 'preset',
   'audio_bitrate_kbps', 'monitor', 'draw_mouse', 'priority', 'ffmpeg_path']);
 const CORNERS = ['top-left', 'top-right', 'bottom-left', 'bottom-right'];
+const DELETE_QUIET_MS = 1000;
 const PRESETS = ['ultrafast', 'superfast', 'veryfast', 'faster', 'fast', 'medium'];
 const PRIORITIES = { idle: 'idle', below: 'below_normal', below_normal: 'below_normal', normal: 'normal',
   above: 'above_normal', above_normal: 'above_normal' };
@@ -1010,9 +1012,21 @@ document.addEventListener('keydown', e => {
     case 'r': handled(); if (c) openCommand(`rename ${stem(c.name)}`, 7); break;
     case 'd':
       handled();
-      if (!c) break;
-      if (Date.now() - deleteArmed < 1500) { deleteArmed = 0; deleteClip(c); }
-      else { deleteArmed = Date.now(); say(`press d again to move ${stem(c.name)} to the Recycle Bin`); }
+      // A held key repeats: without this, holding d empties the whole list.
+      if (!c || e.repeat) break;
+      // Tapping d can't delete clip after clip either: the next one needs a
+      // second without d first, and every tap until then starts that second over.
+      if (Date.now() < deleteQuietUntil) {
+        deleteQuietUntil = Date.now() + DELETE_QUIET_MS;
+        say('wait a second before deleting another clip');
+      } else if (Date.now() - deleteArmed < 1500) {
+        deleteArmed = 0;
+        deleteQuietUntil = Date.now() + DELETE_QUIET_MS;
+        deleteClip(c);
+      } else {
+        deleteArmed = Date.now();
+        say(`press d again to move ${stem(c.name)} to the Recycle Bin`);
+      }
       break;
   }
 });

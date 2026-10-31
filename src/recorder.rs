@@ -6,7 +6,7 @@ use std::os::windows::io::AsRawHandle;
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -32,6 +32,19 @@ const CAPTURE_POLL_HZ: u32 = 500;
 /// slowest one; audio is inherently ~100 ms behind (WASAPI + AAC framing), so
 /// without this the video capture is the one that gets paused and drops frames.
 const AUDIO_SHIFT_SECS: &str = "0.15";
+/// Raw audio sent to ffmpeg per second (48 kHz, stereo, f32).
+const AUDIO_BYTES_PER_SEC: f64 = audio::RATE as f64 * 2.0 * 4.0;
+/// How far ffmpeg may fall behind live audio before capture is restarted.
+const MAX_LAG_SECS: f64 = 5.0;
+
+// D3DKMT_SCHEDULINGPRIORITYCLASS values.
+const GPU_PRIORITY_HIGH: i32 = 4;
+const GPU_PRIORITY_REALTIME: i32 = 5;
+
+#[link(name = "gdi32")]
+extern "system" {
+    fn D3DKMTSetProcessSchedulingPriorityClass(process: HANDLE, priority: i32) -> i32;
+}
 
 struct Shared {
     dir: PathBuf,
@@ -201,6 +214,7 @@ fn run_session(s: &Shared, cfg: &Config) -> Result<bool, String> {
     // lets ffmpeg map its video timestamps onto the audio timeline.
     let t0_qpc = qpc_100ns();
     let t0_rtc = rtc_us();
+    let started = Instant::now();
     let args = ffmpeg_args(cfg, t0_rtc);
 
     let errlog = OpenOptions::new()
@@ -220,10 +234,14 @@ fn run_session(s: &Shared, cfg: &Config) -> Result<bool, String> {
     unsafe {
         let _ = AssignProcessToJobObject(HANDLE(s.job as _), HANDLE(child.as_raw_handle()));
     }
+    let mut gpu_priority_set = false;
     s.pid.store(child.id(), Ordering::Relaxed);
 
     let mut stdout = child.stdout.take().unwrap();
     let audio_stop = AtomicBool::new(false);
+    // Audio bytes ffmpeg has taken so far. Audio arrives in real time, so this
+    // shows whether ffmpeg is keeping up.
+    let audio_taken = AtomicU64::new(0);
     thread::scope(|scope| {
         scope.spawn(|| {
             let mut buf = vec![0u8; 64 * 1024];
@@ -237,11 +255,13 @@ fn run_session(s: &Shared, cfg: &Config) -> Result<bool, String> {
 
         if let Some(mut stdin) = child.stdin.take() {
             let (tx, rx) = mpsc::channel::<Vec<u8>>();
+            let audio_taken = &audio_taken;
             scope.spawn(move || {
                 for chunk in rx {
                     if stdin.write_all(&chunk).is_err() {
                         break;
                     }
+                    audio_taken.fetch_add(chunk.len() as u64, Ordering::Relaxed);
                 }
             });
             let audio_stop = &audio_stop;
@@ -262,6 +282,23 @@ fn run_session(s: &Shared, cfg: &Config) -> Result<bool, String> {
                 }
                 Ok(None) => {}
                 Err(e) => break Err(e.to_string()),
+            }
+            // Only possible once ffmpeg has opened the GPU, a moment after it starts.
+            if !gpu_priority_set {
+                let process = HANDLE(child.as_raw_handle());
+                gpu_priority_set = unsafe { raise_gpu_priority(process, started.elapsed() > Duration::from_secs(10)) };
+            }
+            // When ffmpeg can't keep up (the GPU busy with a game), each frame
+            // it falls behind makes the next gap longer, and video freezes on
+            // one frame while audio piles up here. It never recovers by itself.
+            if has_audio(cfg) {
+                let lag = started.elapsed().as_secs_f64()
+                    - audio_taken.load(Ordering::Relaxed) as f64 / AUDIO_BYTES_PER_SEC;
+                if lag > MAX_LAG_SECS {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    break Err(format!("ffmpeg fell {:.0}s behind real time", lag));
+                }
             }
             thread::sleep(Duration::from_millis(100));
         };
@@ -375,6 +412,27 @@ fn unshim(exe: PathBuf) -> PathBuf {
         .map(|(_, v)| PathBuf::from(v.trim().trim_matches('"')))
         .filter(|p| p.exists())
         .unwrap_or(exe)
+}
+
+/// Lets ffmpeg's GPU work (grabbing, scaling, reading frames back) cut ahead of
+/// a game's. It is a sliver of work, but at normal priority it waits behind
+/// whole game frames: measured at 0.4x real time with a game holding a GT 1030
+/// at 90%, and back to real time at REALTIME. No admin rights needed, but it
+/// fails until the process has opened the GPU. Returns true once done, or once
+/// `give_up` and it still fails (logged).
+unsafe fn raise_gpu_priority(process: HANDLE, give_up: bool) -> bool {
+    let mut status = 0;
+    for (name, prio) in [("realtime", GPU_PRIORITY_REALTIME), ("high", GPU_PRIORITY_HIGH)] {
+        status = D3DKMTSetProcessSchedulingPriorityClass(process, prio);
+        if status == 0 {
+            log!("capture: GPU priority {}", name);
+            return true;
+        }
+    }
+    if give_up {
+        log!("capture: cannot raise GPU priority (NTSTATUS {:#x})", status as u32);
+    }
+    give_up
 }
 
 unsafe fn create_kill_job() -> isize {
