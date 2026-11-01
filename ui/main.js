@@ -30,6 +30,7 @@ function tauriApi() {
     levels: () => invoke('levels'),
     testPopup: () => invoke('test_popup'),
     set: (key, value) => invoke('set_setting', { key, value: String(value) }),
+    setMany: settings => invoke('set_settings', { settings }),
     clips: () => invoke('list_clips'),
     saveClip: () => invoke('save_clip'),
     remove: path => invoke('delete_clip', { path }),
@@ -55,20 +56,24 @@ function browserApi() {
     fake('2026-10-26_23-02-11', 86400 + 3000, 20.5), fake('2026-10-20_18-40-55', 7 * 86400, 31.1)];
   let config = {
     hotkey: 'Alt+F10', open_hotkey: 'Alt+F9', clip_seconds: 20, fps: 60, resolution: 'native', video_bitrate_kbps: 10000,
-    preset: 'ultrafast', audio: true, desktop_volume: 100, mic: false, mic_volume: 100, audio_bitrate_kbps: 160, monitor: 0, draw_mouse: true,
+    encoder: 'auto', preset: 'ultrafast', audio: true, desktop_volume: 100, mic: false, mic_volume: 100, audio_bitrate_kbps: 160, monitor: 0, draw_mouse: true,
     priority: 'below_normal', output_dir: 'C:\\Users\\you\\Videos\\flagra', output_dir_custom: false,
     ffmpeg_path: null, beep: true, popup: true, popup_position: 'top-right', notify: false, start_with_windows: true, keep_window_ready: false,
   };
-  const capture = new Set(['fps', 'resolution', 'video_bitrate_kbps', 'preset', 'audio', 'audio_bitrate_kbps',
+  const capture = new Set(['fps', 'resolution', 'video_bitrate_kbps', 'encoder', 'preset', 'audio', 'audio_bitrate_kbps',
     'monitor', 'draw_mouse', 'priority', 'ffmpeg_path']);
   return {
     ready: async () => {}, close: async () => {}, quit: async () => {}, minimize: async () => {},
     moveWindow: async () => {}, resizeWindow: async () => {}, savePlacement: async () => {}, resetPlacement: async () => {},
     fullscreen: async () => !document.fullscreenElement,
     load: async () => ({ config, warnings: [], cpus: 6 }),
-    status: async () => ({ running: true, recording: true, buffered: 22.8, cpu: 9 + Math.random() * 3, mem_mb: 113 }),
+    status: async () => ({ running: true, recording: true, buffered: 22.8, cpu: 9 + Math.random() * 3, mem_mb: 113, encoder: 'x264' }),
     testPopup: async () => {},
     levels: async () => [Math.random() * 0.6, config.mic ? Math.random() * 1.1 : 0],
+    setMany: async settings => {
+      for (const [key, value] of settings) config = { ...config, [key]: /^\d+$/.test(value) ? Number(value) : value };
+      return { config, restarted: true };
+    },
     set: async (key, value) => {
       const bool = typeof config[key] === 'boolean';
       config = { ...config, [key]: bool ? value === 'true' : /^\d+$/.test(value) ? Number(value) : value };
@@ -106,10 +111,21 @@ let deleteQuietUntil = 0;        // d does nothing until this time, after a dd
 let awaitingClip = 0;            // time we asked the recorder for a clip
 let lastStatus = null;
 
-const CAPTURE_KEYS = new Set(['fps', 'resolution', 'video_bitrate_kbps', 'preset',
+const CAPTURE_KEYS = new Set(['fps', 'resolution', 'video_bitrate_kbps', 'encoder', 'preset',
   'audio_bitrate_kbps', 'monitor', 'draw_mouse', 'priority', 'ffmpeg_path']);
 const CORNERS = ['top-left', 'top-right', 'bottom-left', 'bottom-right'];
 const DELETE_QUIET_MS = 1000;
+// Quality profiles: a set of ordinary settings, so anything can still be tuned
+// after picking one. What's set simply is the profile; change a value and it's custom.
+// high matches ShadowPlay's High quality; high and ultra are meant for a GPU encoder.
+const PROFILES = {
+  potato: { name: 'potato', heavy: false, values: { resolution: '1280x720', fps: 30, video_bitrate_kbps: 4000, preset: 'ultrafast' } },
+  low: { name: 'low end', heavy: false, values: { resolution: '1280x720', fps: 60, video_bitrate_kbps: 8000, preset: 'ultrafast' } },
+  mid: { name: 'mid range', heavy: false, values: { resolution: '1920x1080', fps: 60, video_bitrate_kbps: 15000, preset: 'superfast' } },
+  high: { name: 'high end', heavy: true, values: { resolution: 'native', fps: 60, video_bitrate_kbps: 50000, preset: 'veryfast' } },
+  ultra: { name: 'ultra', heavy: true, values: { resolution: 'native', fps: 60, video_bitrate_kbps: 100000, preset: 'veryfast' } },
+};
+const ENCODERS = ['auto', 'nvenc', 'amf', 'x264'];
 const PRESETS = ['ultrafast', 'superfast', 'veryfast', 'faster', 'fast', 'medium'];
 const PRIORITIES = { idle: 'idle', below: 'below_normal', below_normal: 'below_normal', normal: 'normal',
   above: 'above_normal', above_normal: 'above_normal' };
@@ -149,11 +165,39 @@ function when(ms) {
   return `${d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })} ${time}`;
 }
 
+const profileOf = c => Object.values(PROFILES).find(p => Object.entries(p.values).every(([k, v]) => c[k] === v));
+const encoderLabel = e => ({ x264: 'x264 (CPU)', nvenc: 'NVENC (NVIDIA GPU)', amf: 'AMF (AMD GPU)' })[e] ?? e;
+
+const audioKbps = c => (c.audio || c.mic ? c.audio_bitrate_kbps : 0);
+
 /** Roughly how big a clip is and how much RAM the replay buffer takes. */
 function footprint(c) {
-  const kbps = c.video_bitrate_kbps + (c.audio ? c.audio_bitrate_kbps : 0);
+  const kbps = c.video_bitrate_kbps + audioKbps(c);
   const mb = s => Math.round(kbps / 8 * s / 1000);
   return { clip: mb(c.clip_seconds), ram: mb(c.clip_seconds + 3) };
+}
+
+// A clip can hold more than its length times the bitrate: it starts on a keyframe,
+// up to 1 s early, and the encoder may spend up to 2 s worth of saved-up bits when
+// a calm stretch turns busy (-bufsize). 9.7 Mbps measured 21 MB in a 15 s clip.
+const SIZE_SLACK_SECS = 3;
+const SIZE_MARGIN = 0.98; // the mp4's own overhead
+
+/** The largest a clip can get, in MB. */
+const maxClipMb = c =>
+  Math.ceil((c.video_bitrate_kbps + audioKbps(c)) * (c.clip_seconds + SIZE_SLACK_SECS) / 8000 / SIZE_MARGIN);
+
+/** The video bitrate that keeps every clip under `mb`, or 0 if none can. */
+function bitrateForSize(c, mb) {
+  const total = mb * 8000 * SIZE_MARGIN / (c.clip_seconds + SIZE_SLACK_SECS);
+  const kbps = Math.floor((total - audioKbps(c)) / 100) * 100;
+  return kbps < 100 ? 0 : Math.min(kbps, 200000);
+}
+
+/** Too few bits for this many pixels: fast motion falls apart into blocks. */
+function looksBlocky(c, kbps) {
+  const [w, h] = resLabel(c.resolution).split('x').map(Number);
+  return kbps * 1000 / (w * h * c.fps) < 0.05;
 }
 
 function h(tag, cls, ...children) {
@@ -169,6 +213,7 @@ const SETTINGS = [
   { key: 'hotkey', label: 'clip hotkey', cmd: 'hotkey', value: c => c.hotkey },
   { key: 'open_hotkey', label: 'open hotkey', cmd: 'openkey', value: c => c.open_hotkey ?? ['off', ' · :openkey to set one'] },
   { key: 'clip_seconds', label: 'clip length', cmd: 'len', value: c => `${c.clip_seconds} s` },
+  { key: 'quality', label: 'quality', cmd: 'quality', value: c => [profileOf(c)?.name ?? 'custom', ' · :quality potato, low, mid, high or ultra'] },
   { key: 'fps', label: 'frame rate', cmd: 'fps', value: c => `${c.fps} fps` },
   {
     key: 'resolution', label: 'resolution', cmd: 'res',
@@ -181,6 +226,11 @@ const SETTINGS = [
       return [mbps(c.video_bitrate_kbps), ` · ~${f.clip} MB per clip, ~${f.ram} MB of RAM`];
     },
   },
+  {
+    key: 'encoder', label: 'encoder', cmd: 'encoder',
+    value: c => [c.encoder, lastStatus?.encoder ? ` · using ${encoderLabel(lastStatus.encoder)}` : ''],
+  },
+  { key: 'size', label: 'largest clip', cmd: 'size', value: c => [`${maxClipMb(c)} MB`, ' · :size 20 sets the bitrate to stay under that'] },
   { key: 'preset', label: 'x264 preset', cmd: 'preset', value: c => c.preset },
   // The mixer: both sources go into one track. h l change the volume live.
   {
@@ -228,6 +278,8 @@ const SETTINGS = [
 function settingArg(s) {
   const c = config;
   switch (s.key) {
+    case 'quality': return Object.keys(PROFILES).find(k => PROFILES[k] === profileOf(c)) ?? '';
+    case 'size': return String(maxClipMb(c));
     case 'resolution': return c.resolution === 'native' ? 'native' : c.resolution;
     case 'video_bitrate_kbps': return `${c.video_bitrate_kbps / 1000}m`;
     case 'output_dir': return c.output_dir_custom ? c.output_dir : '';
@@ -496,6 +548,18 @@ async function applySetting(key, value) {
   }
 }
 
+async function applyProfile(p) {
+  try {
+    const r = await api.setMany(Object.entries(p.values).map(([k, v]) => [k, String(v)]));
+    config = r.config;
+    say(`quality ${p.name} saved${r.restarted ? ' · capture restarted' : ''}`, 'done');
+    render();
+    refreshStatus();
+  } catch (err) {
+    say(errText(err), 'error');
+  }
+}
+
 // h l on a mixer row: change its volume now, save it once the keys stop.
 let volumeTimer = 0;
 function adjustVolume(delta) {
@@ -701,7 +765,8 @@ const COMMANDS = {
   clip: () => ({ label: `save the last ${config.clip_seconds} s now`, run: saveClip }),
   len: arg => (!arg ? { label: `clip length in seconds (now ${config.clip_seconds})` } : attempt(() => {
     const n = int(arg, 1, 600, 'length');
-    return change('clip_seconds', n, `clip length ${config.clip_seconds} → ${n} s`);
+    const f = footprint({ ...config, clip_seconds: n });
+    return change('clip_seconds', n, `clip length ${config.clip_seconds} → ${n} s · ~${f.clip} MB per clip`);
   })),
   fps: arg => (!arg ? { label: `frames per second (now ${config.fps}) · 30 roughly halves the CPU cost` } : attempt(() => {
     const n = int(arg, 1, 240, 'fps');
@@ -717,6 +782,32 @@ const COMMANDS = {
     const f = footprint({ ...config, video_bitrate_kbps: n });
     return change('video_bitrate_kbps', n,
       `${mbps(config.video_bitrate_kbps)} → ${mbps(n)} · ~${f.clip} MB per clip, ~${f.ram} MB RAM`);
+  })),
+  size: arg => (!arg ? { label: `largest clip in MB, e.g. 20 (now ${maxClipMb(config)} MB)` } : attempt(() => {
+    const m = /^(\d+(?:\.\d+)?)\s*(mb|m)?$/i.exec(arg);
+    if (!m || +m[1] <= 0) throw 'a size in MB, like 20 or 9.5';
+    const mb = +m[1];
+    const n = bitrateForSize(config, mb);
+    if (!n) throw `${mb} MB is too small for ${config.clip_seconds} s clips · shorten them with :len`;
+    const blocky = looksBlocky(config, n) ? ` · may look blocky at ${shortRes(config.resolution)}${config.fps}, :res or :fps can help` : '';
+    return change('video_bitrate_kbps', n,
+      `clips under ${mb} MB: ${mbps(config.video_bitrate_kbps)} → ${mbps(n)} at ${config.clip_seconds} s${blocky}`);
+  })),
+  quality: arg => (!arg ? { label: `potato, low, mid, high or ultra (now ${profileOf(config)?.name ?? 'custom'})` } : attempt(() => {
+    const p = PROFILES[arg.toLowerCase().split(/\s/)[0]];
+    if (!p) throw 'potato, low, mid, high or ultra';
+    const v = p.values;
+    const f = footprint({ ...config, ...v });
+    const cpu = p.heavy && lastStatus?.encoder === 'x264' ? ' · heavy without a GPU encoder' : '';
+    return {
+      label: `quality ${p.name}: ${resLabel(v.resolution)} ${v.fps} fps ${mbps(v.video_bitrate_kbps)}, ~${f.clip} MB per clip${cpu} · restarts capture`,
+      run: () => applyProfile(p),
+    };
+  })),
+  encoder: arg => (!arg ? { label: `${ENCODERS.join(', ')} (now ${config.encoder}) · auto picks your GPU's if it has one` } : attempt(() => {
+    const e = arg.toLowerCase();
+    if (!ENCODERS.includes(e)) throw ENCODERS.join(', ');
+    return change('encoder', e, `encoder ${config.encoder} → ${e}`);
   })),
   preset: arg => (!arg ? { label: `${PRESETS.join(', ')} (now ${config.preset}) · slower = more CPU` } : attempt(() => {
     const p = arg.toLowerCase();
@@ -903,6 +994,9 @@ function showHelp() {
     ['Commands'],
     [':clip', 'save a clip now'], [':len 30', 'clip length in seconds'], [':fps 30', 'frame rate'],
     [':res 720p', 'resolution (native, 720p, 1080p, 1600x900…)'], [':bitrate 8m', 'video bitrate'],
+    [':size 20', 'bitrate that keeps clips under 20 MB at the current length'],
+    [':quality high', 'quality profile: potato, low, mid, high, ultra'],
+    [':encoder auto', 'video encoder: auto, nvenc, amf, x264'],
     [':preset veryfast', 'x264 preset'],
     [':desktop on|off|80', 'desktop audio, or its volume in % (h l on its settings row)'],
     [':mic on|off|120', 'your microphone, mixed in, or its volume in %'], [':abitrate 192', 'audio bitrate'],

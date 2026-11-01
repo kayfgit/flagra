@@ -17,7 +17,7 @@ use windows::Win32::System::JobObjects::{
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
 };
 
-use crate::config::Config;
+use crate::config::{Config, Encoder};
 use crate::ts::Ring;
 use crate::util::{file_stamp, qpc_100ns, rtc_us};
 use crate::{audio, log};
@@ -36,6 +36,8 @@ const AUDIO_SHIFT_SECS: &str = "0.15";
 const AUDIO_BYTES_PER_SEC: f64 = audio::RATE as f64 * 2.0 * 4.0;
 /// How far ffmpeg may fall behind live audio before capture is restarted.
 const MAX_LAG_SECS: f64 = 5.0;
+/// A GPU encoder that has produced nothing after this long isn't going to.
+const GPU_ENCODER_TIMEOUT: Duration = Duration::from_secs(10);
 
 // D3DKMT_SCHEDULINGPRIORITYCLASS values.
 const GPU_PRIORITY_HIGH: i32 = 4;
@@ -58,6 +60,16 @@ struct Shared {
     job: isize,
     /// Which audio sources are on and how loud, applied live; and their levels.
     controls: Arc<audio::Controls>,
+    /// GPU encoders that failed on this PC; asked again when settings change.
+    failed: Mutex<Vec<Encoder>>,
+    /// The encoder running now; shown in settings.
+    encoder: Mutex<Option<Encoder>>,
+}
+
+/// Why a session ended, for the supervisor.
+enum End {
+    Requested,
+    EncoderFailed(Encoder),
 }
 
 pub struct Recorder {
@@ -79,6 +91,8 @@ impl Recorder {
             pid: AtomicU32::new(0),
             job,
             controls,
+            failed: Mutex::new(Vec::new()),
+            encoder: Mutex::new(None),
         });
         let s = shared.clone();
         let thread = thread::Builder::new().name("supervisor".into()).spawn(move || supervise(&s)).ok();
@@ -99,6 +113,11 @@ impl Recorder {
     pub fn status(&self) -> (u32, Duration) {
         let buffered = self.shared.ring.lock().unwrap().buffered();
         (self.shared.pid.load(Ordering::Relaxed), buffered)
+    }
+
+    /// The encoder running now, if capture is up.
+    pub fn encoder(&self) -> Option<Encoder> {
+        *self.shared.encoder.lock().unwrap()
     }
 
     /// Applies a new clip length without restarting capture.
@@ -177,22 +196,28 @@ fn supervise(s: &Shared) {
     while !s.stop.load(Ordering::Relaxed) {
         let cfg = s.cfg.lock().unwrap().clone();
         *s.ring.lock().unwrap() = Ring::new(Duration::from_secs(cfg.clip_seconds as u64 + SLACK_SECS));
-        s.restart.store(false, Ordering::Relaxed);
+        if s.restart.swap(false, Ordering::Relaxed) {
+            s.failed.lock().unwrap().clear();
+        }
 
         let started = Instant::now();
-        let requested = match run_session(s, &cfg) {
-            Ok(requested) => requested,
-            Err(e) => {
-                log!("capture: {}", e);
-                false
+        let encoder = pick_encoder(cfg.encoder, &s.failed.lock().unwrap());
+        let ended = run_session(s, &cfg, encoder);
+        *s.encoder.lock().unwrap() = None;
+        match ended {
+            Ok(End::Requested) => {
+                backoff = Duration::from_secs(1);
+                continue;
             }
-        };
+            Ok(End::EncoderFailed(e)) => {
+                log!("capture: {} doesn't work on this PC, trying the next encoder", e.name());
+                s.failed.lock().unwrap().push(e);
+                continue;
+            }
+            Err(e) => log!("capture: {}", e),
+        }
         if s.stop.load(Ordering::Relaxed) {
             break;
-        }
-        if requested {
-            backoff = Duration::from_secs(1);
-            continue;
         }
         // Unexpected exit (crash, display mode change, ...): retry, backing off if it keeps failing fast.
         if started.elapsed() > Duration::from_secs(30) {
@@ -207,21 +232,32 @@ fn supervise(s: &Shared) {
     }
 }
 
-/// Returns Ok(true) if the session ended because a restart/stop was requested.
-fn run_session(s: &Shared, cfg: &Config) -> Result<bool, String> {
+/// The first encoder to try: x264 always works, so it's always the last resort.
+fn pick_encoder(wanted: Encoder, failed: &[Encoder]) -> Encoder {
+    let order: &[Encoder] = match wanted {
+        Encoder::Auto => &[Encoder::Nvenc, Encoder::Amf],
+        Encoder::Nvenc => &[Encoder::Nvenc],
+        Encoder::Amf => &[Encoder::Amf],
+        Encoder::X264 => &[],
+    };
+    order.iter().copied().find(|e| !failed.contains(e)).unwrap_or(Encoder::X264)
+}
+
+fn run_session(s: &Shared, cfg: &Config, encoder: Encoder) -> Result<End, String> {
     let ff = resolve_ffmpeg(cfg, &s.dir)?;
     // Audio sample 0 == this instant. Both clocks are read back to back, which
     // lets ffmpeg map its video timestamps onto the audio timeline.
     let t0_qpc = qpc_100ns();
     let t0_rtc = rtc_us();
     let started = Instant::now();
-    let args = ffmpeg_args(cfg, t0_rtc);
+    let args = ffmpeg_args(cfg, t0_rtc, encoder);
 
     let errlog = OpenOptions::new()
         .create(true)
         .append(true)
         .open(s.dir.join("ffmpeg.log"))
         .map_err(|e| format!("cannot open ffmpeg.log: {}", e))?;
+    let log_start = errlog.metadata().map_or(0, |m| m.len());
     log!("capture: starting {} {}", ff.display(), args.join(" "));
     let mut child = Command::new(&ff)
         .args(&args)
@@ -236,6 +272,7 @@ fn run_session(s: &Shared, cfg: &Config) -> Result<bool, String> {
     }
     let mut gpu_priority_set = false;
     s.pid.store(child.id(), Ordering::Relaxed);
+    *s.encoder.lock().unwrap() = Some(encoder);
 
     let mut stdout = child.stdout.take().unwrap();
     let audio_stop = AtomicBool::new(false);
@@ -273,10 +310,13 @@ fn run_session(s: &Shared, cfg: &Config) -> Result<bool, String> {
             if s.stop.load(Ordering::Relaxed) || s.restart.load(Ordering::Relaxed) {
                 let _ = child.kill();
                 let _ = child.wait();
-                break Ok(true);
+                break Ok(End::Requested);
             }
             match child.try_wait() {
                 Ok(Some(status)) => {
+                    if encoder != Encoder::X264 && encoder_complained(&s.dir, log_start, encoder) {
+                        break Ok(End::EncoderFailed(encoder));
+                    }
                     let why = last_ffmpeg_error(&s.dir).unwrap_or_else(|| format!("{}, see ffmpeg.log", status));
                     break Err(format!("ffmpeg stopped: {}", why));
                 }
@@ -287,6 +327,14 @@ fn run_session(s: &Shared, cfg: &Config) -> Result<bool, String> {
             if !gpu_priority_set {
                 let process = HANDLE(child.as_raw_handle());
                 gpu_priority_set = unsafe { raise_gpu_priority(process, started.elapsed() > Duration::from_secs(10)) };
+            }
+            if encoder != Encoder::X264
+                && started.elapsed() > GPU_ENCODER_TIMEOUT
+                && s.ring.lock().unwrap().buffered().is_zero()
+            {
+                let _ = child.kill();
+                let _ = child.wait();
+                break Ok(End::EncoderFailed(encoder));
             }
             // When ffmpeg can't keep up (the GPU busy with a game), each frame
             // it falls behind makes the next gap longer, and video freezes on
@@ -315,7 +363,28 @@ fn has_audio(cfg: &Config) -> bool {
     cfg.audio || cfg.mic
 }
 
-fn ffmpeg_args(cfg: &Config, t0_rtc_us: i64) -> Vec<String> {
+/// The video encoder's own options. Keyframes must stay real IDRs: clips can
+/// only start on those. No B-frames, which also keeps GPU encoders' latency low.
+fn encoder_args(cfg: &Config, encoder: Encoder) -> Vec<String> {
+    let args: &[&str] = match encoder {
+        // Slice threads instead of frame threads: ~half the RAM, lower latency,
+        // and measured slightly less CPU than the default here.
+        Encoder::X264 | Encoder::Auto => &["-c:v", "libx264", "-preset", &cfg.preset, "-tune", "zerolatency"],
+        Encoder::Nvenc => &["-c:v", "h264_nvenc", "-preset", "p4", "-tune", "hq", "-rc", "cbr", "-bf", "0", "-forced-idr", "1"],
+        Encoder::Amf => &["-c:v", "h264_amf", "-usage", "lowlatency", "-quality", "quality", "-rc", "cbr", "-bf", "0", "-forced_idr", "1"],
+    };
+    args.iter().map(|a| a.to_string()).collect()
+}
+
+/// Whether this session's part of ffmpeg.log has the encoder saying something
+/// went wrong, rather than capture failing.
+fn encoder_complained(dir: &Path, log_start: u64, encoder: Encoder) -> bool {
+    let Ok(text) = fs::read(dir.join("ffmpeg.log")) else { return false };
+    let session = String::from_utf8_lossy(text.get(log_start as usize..).unwrap_or(&[])).into_owned();
+    session.contains(&format!("[h264_{} @", encoder.name()))
+}
+
+fn ffmpeg_args(cfg: &Config, t0_rtc_us: i64, encoder: Encoder) -> Vec<String> {
     let mut a: Vec<String> = ["-hide_banner", "-loglevel", "warning", "-nostats"].map(String::from).to_vec();
     if has_audio(cfg) {
         // Raw PCM needs no probing; without these ffmpeg reads ~5 s of audio
@@ -355,11 +424,9 @@ fn ffmpeg_args(cfg: &Config, t0_rtc_us: i64) -> Vec<String> {
         "-map".into(), "[v]".into(),
         "-fps_mode".into(), "cfr".into(),
         "-r".into(), fps,
-        "-c:v".into(), "libx264".into(),
-        "-preset".into(), cfg.preset.clone(),
-        // Slice threads instead of frame threads: ~half the RAM, lower latency,
-        // and measured slightly less CPU than the default here.
-        "-tune".into(), "zerolatency".into(),
+    ]);
+    a.extend(encoder_args(cfg, encoder));
+    a.extend([
         "-b:v".into(), rate.clone(),
         "-maxrate".into(), rate,
         "-bufsize".into(), format!("{}k", cfg.video_bitrate_kbps * 2),
@@ -451,6 +518,15 @@ unsafe fn create_kill_job() -> isize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn encoders_fall_back_to_x264() {
+        assert_eq!(pick_encoder(Encoder::Auto, &[]), Encoder::Nvenc);
+        assert_eq!(pick_encoder(Encoder::Auto, &[Encoder::Nvenc]), Encoder::Amf);
+        assert_eq!(pick_encoder(Encoder::Auto, &[Encoder::Nvenc, Encoder::Amf]), Encoder::X264);
+        assert_eq!(pick_encoder(Encoder::Amf, &[Encoder::Amf]), Encoder::X264);
+        assert_eq!(pick_encoder(Encoder::X264, &[]), Encoder::X264);
+    }
 
     #[test]
     fn last_ffmpeg_error_gives_the_reason_without_the_prefix() {

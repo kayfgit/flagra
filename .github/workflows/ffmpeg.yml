@@ -48,7 +48,7 @@ jobs:
         run: |
           $ff = Resolve-Path out/ffmpeg.exe
           $lists = (& $ff -hide_banner -filters) + (& $ff -hide_banner -encoders) + (& $ff -hide_banner -muxers) | Out-String
-          foreach ($need in 'ddagrab', 'scale_d3d11', 'hwdownload', 'libx264', ' aac ', ' mp4 ', ' mpegts ') {
+          foreach ($need in 'ddagrab', 'scale_d3d11', 'hwdownload', 'libx264', 'h264_nvenc', 'h264_amf', ' aac ', ' mp4 ', ' mpegts ') {
             if ($lists -notmatch [regex]::Escape($need)) { throw "missing $need" }
           }
           $info = [Diagnostics.FileVersionInfo]::GetVersionInfo($ff)

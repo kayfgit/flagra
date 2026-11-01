@@ -38,14 +38,14 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use crate::config::{self, Config, Priority};
-use crate::{hotkey, recorder, util::wide, CLASS, WM_LEVELS, WM_POPUP_TEST, WM_REMOTE_CLIP, WM_REMOTE_QUIT, WM_REMOTE_RELOAD, WM_STATUS};
+use crate::{hotkey, recorder, util::wide, CLASS, WM_ENCODER, WM_LEVELS, WM_POPUP_TEST, WM_REMOTE_CLIP, WM_REMOTE_QUIT, WM_REMOTE_RELOAD, WM_STATUS};
 
 const CF_HDROP: u32 = 15;
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// Settings the GUI may change, in the order it shows them.
 const KEYS: &[&str] = &[
-    "hotkey", "open_hotkey", "clip_seconds", "fps", "resolution", "video_bitrate_kbps", "preset", "audio", "desktop_volume", "mic", "mic_volume",
+    "hotkey", "open_hotkey", "clip_seconds", "fps", "resolution", "video_bitrate_kbps", "encoder", "preset", "audio", "desktop_volume", "mic", "mic_volume",
     "audio_bitrate_kbps", "monitor", "draw_mouse", "priority", "output_dir", "ffmpeg_path", "beep", "popup", "popup_position", "notify", "start_with_windows", "keep_window_ready",
 ];
 
@@ -110,7 +110,7 @@ pub fn run(dir: PathBuf, hidden: bool) {
         })
         .invoke_handler(tauri::generate_handler![
             ready, close, quit, minimize, move_window, resize_window, save_placement, reset_placement, toggle_fullscreen,
-            load, status, levels, set_setting, list_clips, save_clip, delete_clip, rename_clip, copy_clip, reveal, play,
+            load, status, levels, set_setting, set_settings, list_clips, save_clip, delete_clip, rename_clip, copy_clip, reveal, play,
             open_special, start_recorder, stop_recorder, test_popup,
         ])
         .run(tauri::generate_context!())
@@ -306,6 +306,7 @@ fn config_json(c: &Config) -> Value {
         "fps": c.fps,
         "resolution": c.resolution.map_or("native".to_string(), |(w, h)| format!("{}x{}", w, h)),
         "video_bitrate_kbps": c.video_bitrate_kbps,
+        "encoder": c.encoder.name(),
         "preset": c.preset,
         "audio": c.audio,
         "desktop_volume": c.desktop_volume,
@@ -344,6 +345,8 @@ struct Status {
     cpu: Option<f64>,
     mem_mb: Option<f64>,
     error: Option<String>,
+    /// The encoder running now.
+    encoder: Option<&'static str>,
 }
 
 #[tauri::command]
@@ -362,6 +365,11 @@ fn status(state: State<UiState>) -> Status {
         st.error = last_capture_error(&state.dir);
         return st;
     }
+    let mut encoder = 0usize;
+    unsafe {
+        SendMessageTimeoutW(h, WM_ENCODER, WPARAM(0), LPARAM(0), SMTO_ABORTIFHUNG | SMTO_BLOCK, 500, Some(&mut encoder));
+    }
+    st.encoder = ["x264", "nvenc", "amf"].get(encoder.wrapping_sub(1)).copied();
     if let Some((cpu_100ns, mem)) = unsafe { process_stats(pid) } {
         st.mem_mb = mem;
         let now = Instant::now();
@@ -416,22 +424,46 @@ fn last_capture_error(dir: &Path) -> Option<String> {
         .map(|m| m.trim_start_matches("capture: ").to_string())
 }
 
+/// Validates a value alone, so a bad one is reported instead of silently ignored.
+fn check_setting(key: &str, value: &str) -> Result<(), String> {
+    if !KEYS.contains(&key) {
+        return Err(format!("unknown setting {}", key));
+    }
+    if value.contains(['#', '\n', '\r']) {
+        return Err("values can't contain # or line breaks".into());
+    }
+    let (_, warnings) = config::parse(&format!("{} = {}", key, value));
+    match warnings.first() {
+        Some(w) => Err(w.trim_start_matches("line 1: ").replace(", using default", "")),
+        None => Ok(()),
+    }
+}
+
+/// Changes several settings in one save, so capture restarts only once (a
+/// quality profile). Not for hotkeys or the clips folder, which set_setting checks.
+#[tauri::command]
+fn set_settings(state: State<UiState>, settings: Vec<(String, String)>) -> Result<Value, String> {
+    let text = fs::read_to_string(&state.cfg_path).unwrap_or_else(|_| config::TEMPLATE.to_string());
+    let (old, _) = config::parse(&text);
+    let mut new_text = text;
+    for (key, value) in &settings {
+        check_setting(key, value.trim())?;
+        new_text = config::set_value(&new_text, key, value.trim());
+    }
+    let (cfg, _) = config::parse(&new_text);
+    fs::write(&state.cfg_path, new_text).map_err(|e| format!("cannot save settings: {}", e))?;
+    if let Some(h) = recorder_window() {
+        unsafe { let _ = PostMessageW(Some(h), WM_REMOTE_RELOAD, WPARAM(1), LPARAM(0)); }
+    }
+    Ok(json!({ "config": config_json(&cfg), "restarted": old.capture_differs(&cfg) }))
+}
+
 /// Changes one setting in flagra.ini (keeping its comments) and tells the
 /// recorder to pick it up.
 #[tauri::command]
 fn set_setting(app: AppHandle, state: State<UiState>, key: String, value: String) -> Result<Value, String> {
-    if !KEYS.contains(&key.as_str()) {
-        return Err(format!("unknown setting {}", key));
-    }
     let value = value.trim();
-    if value.contains(['#', '\n', '\r']) {
-        return Err("values can't contain # or line breaks".into());
-    }
-    // Validate the value alone first, so a bad one is reported instead of silently ignored.
-    let (_, warnings) = config::parse(&format!("{} = {}", key, value));
-    if let Some(w) = warnings.first() {
-        return Err(w.trim_start_matches("line 1: ").replace(", using default", ""));
-    }
+    check_setting(&key, value)?;
     let text = fs::read_to_string(&state.cfg_path).unwrap_or_else(|_| config::TEMPLATE.to_string());
     let (old, _) = config::parse(&text);
     let new_text = config::set_value(&text, &key, value);

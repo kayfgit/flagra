@@ -16,10 +16,10 @@ use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 
-use windows::core::{w, PCWSTR, PWSTR};
+use windows::core::{w, PCSTR, PCWSTR, PWSTR};
 use windows::Win32::Foundation::{CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows::Win32::System::Diagnostics::Debug::MessageBeep;
-use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress, LoadLibraryW};
 use windows::Win32::System::Threading::{
     CreateMutexW, OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
 };
@@ -34,7 +34,7 @@ use windows::Win32::UI::Shell::{
 };
 use windows::Win32::UI::WindowsAndMessaging::*;
 
-use config::Config;
+use config::{Config, Encoder};
 use recorder::Recorder;
 use util::{copy_wide, wide};
 
@@ -51,6 +51,8 @@ pub const WM_STATUS: u32 = WM_APP + 6;
 pub const WM_LEVELS: u32 = WM_APP + 7;
 /// From the GUI: show a sample popup where clips would show it (:popup test).
 pub const WM_POPUP_TEST: u32 = WM_APP + 8;
+/// From the GUI: returns the encoder running now: 0 none, 1 x264, 2 NVENC, 3 AMF.
+pub const WM_ENCODER: u32 = WM_APP + 9;
 const HOTKEY_ID: i32 = 1;
 const OPEN_HOTKEY_ID: i32 = 2;
 /// Where each hotkey sits in App::keys.
@@ -180,6 +182,7 @@ fn main() {
         app().hwnd.store(h.0 as isize, Ordering::Relaxed);
         app().taskbar_created.store(RegisterWindowMessageW(w!("TaskbarCreated")), Ordering::Relaxed);
 
+        dark_menus();
         add_tray_icon();
         register_hotkeys();
         watch_raw_keyboard();
@@ -223,6 +226,14 @@ unsafe extern "system" fn wndproc(h: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
         WM_STATUS => {
             let (pid, buffered) = app().rec.status();
             return LRESULT(((buffered.as_millis().min(u32::MAX as u128) as isize) << 32) | pid as isize);
+        }
+        WM_ENCODER => {
+            return LRESULT(match app().rec.encoder() {
+                Some(Encoder::X264) => 1,
+                Some(Encoder::Nvenc) => 2,
+                Some(Encoder::Amf) => 3,
+                _ => 0,
+            });
         }
         WM_NOTE => {
             if let Some((title, text, err)) = app().note.lock().unwrap().take() {
@@ -273,6 +284,21 @@ fn hotkey_pressed(i: usize) {
     match HOTKEYS[i] {
         HOTKEY_ID => save_clip(),
         _ => toggle_ui(),
+    }
+}
+
+/// Dark tray menu. Windows has no public API for this: these are uxtheme.dll's
+/// unnamed exports SetPreferredAppMode (135) and FlushMenuThemes (136), which
+/// is how Explorer and most apps do it. If they're ever gone the menu stays light.
+unsafe fn dark_menus() {
+    const FORCE_DARK: i32 = 2;
+    let Ok(uxtheme) = LoadLibraryW(w!("uxtheme.dll")) else { return };
+    let ordinal = |n: usize| PCSTR(n as *const u8);
+    if let (Some(set_mode), Some(flush)) = (GetProcAddress(uxtheme, ordinal(135)), GetProcAddress(uxtheme, ordinal(136))) {
+        let set_mode: unsafe extern "system" fn(i32) -> i32 = std::mem::transmute(set_mode);
+        let flush: unsafe extern "system" fn() = std::mem::transmute(flush);
+        set_mode(FORCE_DARK);
+        flush();
     }
 }
 

@@ -9,6 +9,10 @@ Each release's notes on GitHub are its section below. Add new entries under
 
 * a ShadowPlay-style popup when a clip is saved, in a corner of the screen the game is on; it never takes focus and clicks go through it (`:popup on|off|test|<corner>`) ([c303790](https://github.com/kayfgit/flagra/commit/c303790))
 * the bundled ffmpeg carries flagra's name and icon, so Task Manager lists it inside the flagra group instead of as a stray ffmpeg.exe ([814e817](https://github.com/kayfgit/flagra/commit/814e817))
+* GPU encoding like ShadowPlay's: flagra uses NVENC (NVIDIA) or AMF (AMD) when your graphics card has one, for high quality at almost no CPU cost, and falls back to x264 if it doesn't or if it fails (`:encoder`)
+* quality profiles from potato to ultra, which set resolution, frame rate, bitrate and preset together (`:quality`)
+* `:size 20` sets the bitrate that keeps clips under 20 MB at your clip length, handy for Discord
+* the tray menu is dark
 
 ### Changes
 

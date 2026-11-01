@@ -53,6 +53,36 @@ impl Corner {
     }
 }
 
+/// What encodes the video. Auto takes the first that works: NVENC, AMF, then x264.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Encoder {
+    Auto,
+    X264,
+    Nvenc,
+    Amf,
+}
+
+impl Encoder {
+    pub fn parse(s: &str) -> Option<Encoder> {
+        Some(match s.to_ascii_lowercase().as_str() {
+            "auto" => Encoder::Auto,
+            "x264" | "cpu" => Encoder::X264,
+            "nvenc" | "nvidia" => Encoder::Nvenc,
+            "amf" | "amd" => Encoder::Amf,
+            _ => return None,
+        })
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Encoder::Auto => "auto",
+            Encoder::X264 => "x264",
+            Encoder::Nvenc => "nvenc",
+            Encoder::Amf => "amf",
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Config {
     pub hotkey: String,
@@ -63,6 +93,8 @@ pub struct Config {
     /// None = capture at the monitor's native resolution.
     pub resolution: Option<(u32, u32)>,
     pub video_bitrate_kbps: u32,
+    pub encoder: Encoder,
+    /// x264's preset; GPU encoders don't use it.
     pub preset: String,
     /// Desktop audio (loopback of the default output device).
     pub audio: bool,
@@ -103,6 +135,7 @@ impl Default for Config {
             fps: 60,
             resolution: None,
             video_bitrate_kbps: 10_000,
+            encoder: Encoder::Auto,
             preset: "ultrafast".into(),
             audio: true,
             desktop_volume: 100,
@@ -154,6 +187,11 @@ resolution = native
 
 # Video bitrate in kbit/s. Higher = better quality and bigger files, at almost the same CPU cost.
 video_bitrate_kbps = 10000
+
+# What encodes the video: auto, nvenc (NVIDIA), amf (AMD) or x264 (the CPU).
+# auto uses the graphics card's encoder if it has one, which costs almost no CPU,
+# and x264 otherwise. If a graphics card encoder doesn't work, flagra falls back to x264.
+encoder = auto
 
 # x264 preset. ultrafast uses the least CPU; each step slower costs noticeably more CPU
 # for better quality at the same bitrate. Options: ultrafast superfast veryfast faster fast medium
@@ -208,6 +246,7 @@ impl Config {
         self.fps != other.fps
             || self.resolution != other.resolution
             || self.video_bitrate_kbps != other.video_bitrate_kbps
+            || self.encoder != other.encoder
             || self.preset != other.preset
             // Only whether there's an audio track at all; which sources and how loud apply live.
             || (self.audio || self.mic) != (other.audio || other.mic)
@@ -306,6 +345,10 @@ pub fn parse(text: &str) -> (Config, Vec<String>) {
                     bad("expected native or WIDTHxHEIGHT");
                 }
             }
+            "encoder" => match Encoder::parse(val) {
+                Some(e) => c.encoder = e,
+                None => bad("expected auto, nvenc, amf or x264"),
+            },
             "preset" => {
                 let v = val.to_ascii_lowercase();
                 if PRESETS.contains(&v.as_str()) {

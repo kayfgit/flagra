@@ -1,6 +1,7 @@
 # flagra
 
 ShadowPlay-style instant replay for PCs that can't run ShadowPlay (no NVENC: GT 1030, GT 710, iGPU-less CPUs, ...).
+On PCs that can, it uses the graphics card's encoder (NVENC or AMF) just like ShadowPlay does.
 Press a hotkey, get the last N seconds as an `.mp4`.
 
 - Lives in the tray; default hotkey **Alt+F10**, saves the last **20 s** to `Videos\flagra`.
@@ -102,13 +103,29 @@ The *desktop audio* and *microphone* rows in settings are a small mixer: each ha
 Both go into the clip's one audio track. Volumes and switching sources apply instantly, without
 restarting capture; while the microphone is off flagra doesn't open it at all.
 
+`:quality` picks a profile for your PC, which sets resolution, frame rate, bitrate and preset together.
+Change any of those afterwards and it shows as custom.
+
+| Profile | Video | For |
+| --- | --- | --- |
+| `potato` | 720p, 30 fps, 4 Mbps | very old CPUs |
+| `low` | 720p, 60 fps, 8 Mbps | low-end PCs |
+| `mid` | 1080p, 60 fps, 15 Mbps | mid-range PCs |
+| `high` | native, 60 fps, 50 Mbps | a graphics card with NVENC or AMF (ShadowPlay's High) |
+| `ultra` | native, 60 fps, 100 Mbps | the same, for the best quality |
+
+`:size` keeps clips under a file size, say for a Discord upload. `:size 20` works out the bitrate for
+your current clip length (15 s clips get 8.5 Mbps) and the *largest clip* row in settings shows the
+limit you have now. Clips usually come out a little smaller, since the figure allows for a busy clip
+after a calm stretch. It's a bitrate like any other, so set it again if you change `:len`.
+
 Settings change through commands, with a preview of what they'll do as you type:
-`:len 30`, `:fps 30`, `:res 720p`, `:bitrate 8m`, `:preset veryfast`, `:desktop 80` / `:desktop off`, `:mic on` / `:mic 120`, `:abitrate 192`,
+`:quality high`, `:size 20`, `:encoder auto`, `:len 30`, `:fps 30`, `:res 720p`, `:bitrate 8m`, `:preset veryfast`, `:desktop 80` / `:desktop off`, `:mic on` / `:mic 120`, `:abitrate 192`,
 `:hotkey` / `:openkey` (then press the combo), `:monitor 1`, `:mouse`, `:priority below`, `:dir D:\Clips`,
 `:beep`, `:notify`, `:ffmpeg PATH`. Plus `:clip`, `:folder`, `:log`, `:ini`, `:start` / `:stop`
 (the background recorder), `:move`, `:resize`, `:f`, `:min`, `:keepready`, `:q` / `:q!` and `:help`.
 
-Only settings that change the encoding (fps, resolution, bitrate, preset, having audio at all, monitor, cursor,
+Only settings that change the encoding (fps, resolution, bitrate, encoder, preset, having audio at all, monitor, cursor,
 priority, ffmpeg) restart capture, which starts the replay buffer over. The rest (hotkey, clip length,
 folder, beep, notification) apply instantly without losing what's buffered.
 
@@ -134,6 +151,7 @@ The window edits this file for you (keeping its comments). Editing it by hand wo
 | `fps` | `60` | `30` roughly halves the encoding cost. |
 | `resolution` | `native` | Or e.g. `1280x720`. Scaling happens on the GPU, and a lower resolution saves a lot of CPU. |
 | `video_bitrate_kbps` | `10000` | Quality and file size. Barely affects CPU. |
+| `encoder` | `auto` | `auto` uses NVENC or AMF if your graphics card has one, else x264. `nvenc`, `amf` or `x264` choose one; a GPU encoder that fails falls back to x264. |
 | `preset` | `ultrafast` | x264 preset. Each step slower = better quality per bit, noticeably more CPU. |
 | `audio` | `true` | Desktop audio (whatever plays on the default output device; follows device switches). |
 | `mic` | `false` | Your default microphone, mixed into the same track. Off = never opened. |
@@ -173,6 +191,7 @@ hotkey → copy the last N s of the ring → remux to .mp4 (no re-encode)
 ```
 
 - **No hardware encoder** on these cards, so encoding is x264 on the CPU at the fastest preset.
+  Cards that have one use NVENC or AMF instead, with the same capture pipeline.
   Everything else (capture, scaling, colour conversion) stays on the GPU, so the CPU only
   receives a ready-to-encode NV12 frame.
 - **Smooth capture on high-refresh monitors.** ddagrab paced at 60 fps waits only half a frame for new content,

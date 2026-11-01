@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Builds the small ffmpeg.exe flagra ships: only what flagra uses (screen capture
-# with ddagrab, GPU scaling and download, x264, AAC, MPEG-TS and MP4), statically
-# linked and cross-compiled for 64-bit Windows from Linux (Ubuntu: apt install
-# mingw-w64 nasm pkg-config make).
+# with ddagrab, GPU scaling and download, x264, NVENC, AMF, AAC, MPEG-TS and MP4),
+# statically linked and cross-compiled for 64-bit Windows from Linux (Ubuntu: apt
+# install mingw-w64 nasm pkg-config make).
 #
 # Writes to $OUT (default ./out): ffmpeg.exe, COPYING.GPLv2, README.txt, and the
 # exact sources it was built from plus this script, which the GPL asks us to offer.
@@ -21,11 +21,23 @@ jobs=$(nproc)
 cd "$work"
 ffmpeg_src="ffmpeg-$FFMPEG_VERSION.tar.xz"
 x264_src="x264-$X264_REF.tar.bz2"
+nv_src="nv-codec-headers-$NV_CODEC_REF.tar.gz"
+amf_src="AMF-headers-$AMF_REF.tar.gz"
 [ -f "$ffmpeg_src" ] || curl -fsSL -o "$ffmpeg_src" "https://ffmpeg.org/releases/$ffmpeg_src"
 [ -f "$x264_src" ] || curl -fsSL -o "$x264_src" "https://code.videolan.org/videolan/x264/-/archive/$X264_REF/$x264_src"
-rm -rf ffmpeg x264 && mkdir ffmpeg x264
+[ -f "$nv_src" ] || curl -fsSL -o "$nv_src" "https://github.com/FFmpeg/nv-codec-headers/archive/refs/tags/$NV_CODEC_REF.tar.gz"
+[ -f "$amf_src" ] || curl -fsSL -o "$amf_src" "https://github.com/GPUOpen-LibrariesAndSDKs/AMF/releases/download/$AMF_REF/$amf_src"
+rm -rf ffmpeg x264 nv-codec-headers amf && mkdir ffmpeg x264 nv-codec-headers amf
 tar -xf "$ffmpeg_src" -C ffmpeg --strip-components=1
 tar -xf "$x264_src" -C x264 --strip-components=1
+tar -xf "$nv_src" -C nv-codec-headers --strip-components=1
+tar -xf "$amf_src" -C amf
+
+# NVENC and AMF: headers only. ffmpeg loads the GPU driver's own library at run
+# time, so these cost almost no size and simply report failure on other GPUs.
+make -C nv-codec-headers PREFIX="$prefix" install
+mkdir -p "$prefix/include"
+cp -r "$(dirname "$(find amf -type d -name core | head -1)")" "$prefix/include/AMF"
 
 # x264: 8-bit 4:2:0 only (flagra feeds it NV12), library only, no extras.
 (
@@ -40,7 +52,8 @@ tar -xf "$x264_src" -C x264 --strip-components=1
 
 # ffmpeg: everything off, then exactly what flagra's commands need.
 #  recording: f32le audio from a pipe + ddagrab -> setpts -> fps -> scale_d3d11 ->
-#             hwdownload -> format, encoded with libx264 and aac into MPEG-TS on a pipe
+#             hwdownload -> format, encoded with libx264 and aac into MPEG-TS on a pipe;
+#             with a GPU encoder, the Direct3D frames go straight to h264_nvenc or h264_amf
 #  saving:    MPEG-TS from a file -> MP4, stream copy (h264/aac parsers, aac_adtstoasc)
 #  aresample/aformat/scale/null/anull are what ffmpeg inserts on its own for conversions.
 (
@@ -53,8 +66,9 @@ tar -xf "$x264_src" -C x264 --strip-components=1
     --disable-everything --disable-autodetect --disable-doc --disable-debug \
     --disable-network --disable-ffplay --disable-ffprobe --disable-avdevice \
     --enable-gpl --enable-libx264 --enable-w32threads --enable-d3d11va \
+    --enable-ffnvcodec --enable-nvenc --enable-amf \
     --enable-filter=ddagrab,scale_d3d11,hwdownload,format,fps,setpts,scale,aresample,aformat,null,anull \
-    --enable-encoder=libx264,aac \
+    --enable-encoder=libx264,h264_nvenc,h264_amf,aac \
     --enable-decoder=pcm_f32le,h264,aac \
     --enable-parser=h264,aac \
     --enable-demuxer=pcm_f32le,mpegts \
@@ -100,7 +114,7 @@ EOF
   cp COPYING.GPLv2 "$out/COPYING.GPLv2"
 )
 
-cp "$work/$ffmpeg_src" "$work/$x264_src" "$here/build.sh" "$here/version.env" "$out/"
+cp "$work/$ffmpeg_src" "$work/$x264_src" "$work/$nv_src" "$work/$amf_src" "$here/build.sh" "$here/version.env" "$out/"
 cat > "$out/README.txt" <<EOF
 This folder holds ffmpeg $FFMPEG_VERSION with x264, built for flagra with only the
 parts flagra uses (see build.sh). flagra runs it as a separate program, which is
