@@ -13,6 +13,11 @@ next to it (`ffmpeg\COPYING.GPLv2.txt`). The exact source code each bundled buil
 script that built it, are attached to its release on this repository, named `ffmpeg-<version>-<build>`
 (the current one is named in [ffmpeg/version.env](ffmpeg/version.env)).
 
+For NVENC and AMF it is compiled with the MIT-licensed
+[nv-codec-headers](https://github.com/FFmpeg/nv-codec-headers) and
+[AMF](https://github.com/GPUOpen-LibrariesAndSDKs/AMF) headers, attached to that release too. The encoders
+themselves are part of your graphics driver and are not bundled.
+
 ## Rust crates and the window
 
 flagra.exe is built from Rust crates under permissive licenses (MIT, Apache-2.0 and similar), including
