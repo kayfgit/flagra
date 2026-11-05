@@ -3,6 +3,12 @@
 Each release's notes on GitHub are its section below. Add new entries under
 "Unreleased"; at release time it becomes the version's heading.
 
+## Unreleased
+
+### Bug Fixes
+
+* games like League of Legends no longer micro-stutter while flagra records: capture grabs the screen at twice the clip frame rate instead of 500 times a second (a moving cursor alone made it copy the whole screen ~120 times a second), and its GPU priority is high instead of realtime, so it stops interrupting the game mid-frame. `:gpu normal|high|realtime` changes it ([11b4ee8](https://github.com/kayfgit/flagra/commit/11b4ee8))
+
 ## [0.3.0](https://github.com/kayfgit/flagra/compare/v0.2.0...v0.3.0) (2026-11-01)
 
 ### Features

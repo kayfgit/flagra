@@ -57,11 +57,11 @@ function browserApi() {
   let config = {
     hotkey: 'Alt+F10', open_hotkey: 'Alt+F9', clip_seconds: 20, fps: 60, resolution: 'native', video_bitrate_kbps: 10000,
     encoder: 'auto', preset: 'ultrafast', audio: true, desktop_volume: 100, mic: false, mic_volume: 100, audio_bitrate_kbps: 160, monitor: 0, draw_mouse: true,
-    priority: 'below_normal', output_dir: 'C:\\Users\\you\\Videos\\flagra', output_dir_custom: false,
+    priority: 'below_normal', gpu_priority: 'high', output_dir: 'C:\\Users\\you\\Videos\\flagra', output_dir_custom: false,
     ffmpeg_path: null, beep: true, popup: true, popup_position: 'top-right', notify: false, start_with_windows: true, keep_window_ready: false,
   };
   const capture = new Set(['fps', 'resolution', 'video_bitrate_kbps', 'encoder', 'preset', 'audio', 'audio_bitrate_kbps',
-    'monitor', 'draw_mouse', 'priority', 'ffmpeg_path']);
+    'monitor', 'draw_mouse', 'priority', 'gpu_priority', 'ffmpeg_path']);
   return {
     ready: async () => {}, close: async () => {}, quit: async () => {}, minimize: async () => {},
     moveWindow: async () => {}, resizeWindow: async () => {}, savePlacement: async () => {}, resetPlacement: async () => {},
@@ -112,7 +112,7 @@ let awaitingClip = 0;            // time we asked the recorder for a clip
 let lastStatus = null;
 
 const CAPTURE_KEYS = new Set(['fps', 'resolution', 'video_bitrate_kbps', 'encoder', 'preset',
-  'audio_bitrate_kbps', 'monitor', 'draw_mouse', 'priority', 'ffmpeg_path']);
+  'audio_bitrate_kbps', 'monitor', 'draw_mouse', 'priority', 'gpu_priority', 'ffmpeg_path']);
 const CORNERS = ['top-left', 'top-right', 'bottom-left', 'bottom-right'];
 const DELETE_QUIET_MS = 1000;
 // Quality profiles: a set of ordinary settings, so anything can still be tuned
@@ -129,6 +129,12 @@ const ENCODERS = ['auto', 'nvenc', 'amf', 'x264'];
 const PRESETS = ['ultrafast', 'superfast', 'veryfast', 'faster', 'fast', 'medium'];
 const PRIORITIES = { idle: 'idle', below: 'below_normal', below_normal: 'below_normal', normal: 'normal',
   above: 'above_normal', above_normal: 'above_normal' };
+const GPU_PRIORITIES = ['normal', 'high', 'realtime'];
+const GPU_HINTS = {
+  normal: ' · never slows a game, clips may freeze when the GPU is maxed',
+  high: '',
+  realtime: ' · smoothest clips, some games may stutter',
+};
 const RESOLUTIONS = { native: 'native', '480p': '854x480', '540p': '960x540', '720p': '1280x720',
   '900p': '1600x900', '1080p': '1920x1080', '1440p': '2560x1440', '2160p': '3840x2160', '4k': '3840x2160' };
 
@@ -248,6 +254,7 @@ const SETTINGS = [
   { key: 'monitor', label: 'monitor', cmd: 'monitor', value: c => String(c.monitor) },
   { key: 'draw_mouse', label: 'mouse cursor', cmd: 'mouse', bool: true, value: c => (c.draw_mouse ? 'shown' : 'hidden') },
   { key: 'priority', label: 'encoder priority', cmd: 'priority', value: c => priorityLabel(c.priority) },
+  { key: 'gpu_priority', label: 'capture GPU priority', cmd: 'gpu', value: c => [c.gpu_priority, GPU_HINTS[c.gpu_priority]] },
   {
     key: 'output_dir', label: 'clips folder', cmd: 'dir',
     value: c => [c.output_dir, c.output_dir_custom ? '' : ' (default)'],
@@ -853,6 +860,11 @@ const COMMANDS = {
     if (!p) throw 'idle, below, normal or above';
     return change('priority', p, `encoder priority ${priorityLabel(config.priority)} → ${priorityLabel(p)}`);
   })),
+  gpu: arg => (!arg ? { label: `${GPU_PRIORITIES.join(', ')} (now ${config.gpu_priority}) · lower it if a game stutters` } : attempt(() => {
+    const p = arg.toLowerCase();
+    if (!GPU_PRIORITIES.includes(p)) throw GPU_PRIORITIES.join(', ');
+    return change('gpu_priority', p, `capture GPU priority ${config.gpu_priority} → ${p}`);
+  })),
   dir: arg => (!arg ? { label: `folder for clips (now ${config.output_dir}) · :dir reset for the default` }
     : /^(reset|default)$/i.test(arg) ? change('output_dir', '', 'clips go to Videos\\flagra')
     : change('output_dir', arg, `clips go to ${arg}`)),
@@ -1002,7 +1014,7 @@ function showHelp() {
     [':mic on|off|120', 'your microphone, mixed in, or its volume in %'], [':abitrate 192', 'audio bitrate'],
     [':hotkey', 'press a new combo for saving clips'], [':openkey', 'press a new combo for opening flagra (:openkey off)'],
     [':monitor 1', 'which display'], [':mouse', 'show / hide the cursor'],
-    [':priority below', 'encoder priority'], [':dir D:\\Clips', 'clips folder (:dir reset)'],
+    [':priority below', 'encoder priority'], [':gpu high', 'capture GPU priority: normal, high, realtime'], [':dir D:\\Clips', 'clips folder (:dir reset)'],
     [':popup', 'the popup on save: on, off, test, or a corner like bottom-left'],
     [':beep  :notify', 'toggle the beep / the Windows notification on save'], [':autostart', 'toggle starting with Windows'],
     [':keepready', 'keep the window ready so it opens instantly (uses memory while closed)'], [':ffmpeg PATH', 'ffmpeg.exe to use (:ffmpeg auto)'],
