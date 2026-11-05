@@ -47,7 +47,7 @@ impl<const N: usize> Keys<N> {
 
     /// Whether this press of combo `i` hasn't been acted on yet.
     pub fn first_report(&mut self, i: usize, now: Instant) -> bool {
-        let fresh = self.last[i].map_or(true, |t| now.duration_since(t) >= SAME_PRESS);
+        let fresh = self.last[i].is_none_or(|t| now.duration_since(t) >= SAME_PRESS);
         if fresh {
             self.last[i] = Some(now);
         }
@@ -62,7 +62,9 @@ fn plain(mods: HOT_KEY_MODIFIERS) -> u32 {
 /// The modifier keys down right now, wherever the keyboard focus is.
 pub fn mods_down() -> HOT_KEY_MODIFIERS {
     let mut mods = HOT_KEY_MODIFIERS(0);
-    for (vk, m) in [(VK_CONTROL, MOD_CONTROL), (VK_MENU, MOD_ALT), (VK_SHIFT, MOD_SHIFT), (VK_LWIN, MOD_WIN), (VK_RWIN, MOD_WIN)] {
+    for (vk, m) in
+        [(VK_CONTROL, MOD_CONTROL), (VK_MENU, MOD_ALT), (VK_SHIFT, MOD_SHIFT), (VK_LWIN, MOD_WIN), (VK_RWIN, MOD_WIN)]
+    {
         if unsafe { GetAsyncKeyState(vk.0 as i32) } < 0 {
             mods |= m;
         }

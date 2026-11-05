@@ -119,10 +119,8 @@ impl Ring {
             return None;
         }
         let now = Instant::now();
-        let first = (0..self.chunks.len())
-            .rev()
-            .find(|&i| now.duration_since(self.chunks[i].start) >= secs)
-            .unwrap_or(0);
+        let first =
+            (0..self.chunks.len()).rev().find(|&i| now.duration_since(self.chunks[i].start) >= secs).unwrap_or(0);
         let total: usize = self.chunks.iter().skip(first).map(|c| c.data.len()).sum();
         let mut out = Vec::with_capacity(total + 2 * PKT);
         out.extend_from_slice(&pat);

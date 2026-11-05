@@ -73,13 +73,8 @@ pub fn show(title: &str, detail: &str, error: bool, corner: Corner) {
             Corner::BottomLeft | Corner::BottomRight => area.bottom - h - margin,
         };
 
-        *TOAST.lock().unwrap() = Some(Toast {
-            title: title.to_string(),
-            detail: detail.to_string(),
-            error,
-            scale,
-            since: Instant::now(),
-        });
+        *TOAST.lock().unwrap() =
+            Some(Toast { title: title.to_string(), detail: detail.to_string(), error, scale, since: Instant::now() });
         let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), 0, LWA_ALPHA);
         // Topmost again every time: games and fullscreen apps push themselves up too.
         let _ = SetWindowPos(hwnd, Some(HWND_TOPMOST), x, y, w, h, SWP_NOACTIVATE | SWP_SHOWWINDOW);
@@ -110,8 +105,14 @@ unsafe fn window() -> Option<HWND> {
         CLASS,
         w!("flagra"),
         WS_POPUP,
-        0, 0, 0, 0,
-        None, None, Some(instance.into()), None,
+        0,
+        0,
+        0,
+        0,
+        None,
+        None,
+        Some(instance.into()),
+        None,
     )
     .ok()?;
     let round = DWMWCP_ROUND;
@@ -210,8 +211,18 @@ unsafe fn text(hdc: HDC, s: &str, r: &mut RECT) {
 
 unsafe fn font(face: &[u16], height: i32, weight: i32) -> HFONT {
     CreateFontW(
-        -height, 0, 0, 0, weight, 0, 0, 0,
-        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+        -height,
+        0,
+        0,
+        0,
+        weight,
+        0,
+        0,
+        0,
+        DEFAULT_CHARSET,
+        OUT_DEFAULT_PRECIS,
+        CLIP_DEFAULT_PRECIS,
+        CLEARTYPE_QUALITY,
         (FF_MODERN.0 | FIXED_PITCH.0) as u32,
         PCWSTR(face.as_ptr()),
     )

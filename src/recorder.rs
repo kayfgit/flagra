@@ -326,8 +326,9 @@ fn run_session(s: &Shared, cfg: &Config, encoder: Encoder) -> Result<End, String
             // Only possible once ffmpeg has opened the GPU, a moment after it starts.
             if !gpu_priority_set {
                 let process = HANDLE(child.as_raw_handle());
-                gpu_priority_set =
-                    unsafe { raise_gpu_priority(process, cfg.gpu_priority, started.elapsed() > Duration::from_secs(10)) };
+                gpu_priority_set = unsafe {
+                    raise_gpu_priority(process, cfg.gpu_priority, started.elapsed() > Duration::from_secs(10))
+                };
             }
             if encoder != Encoder::X264
                 && started.elapsed() > GPU_ENCODER_TIMEOUT
@@ -341,8 +342,8 @@ fn run_session(s: &Shared, cfg: &Config, encoder: Encoder) -> Result<End, String
             // it falls behind makes the next gap longer, and video freezes on
             // one frame while audio piles up here. It never recovers by itself.
             if has_audio(cfg) {
-                let lag = started.elapsed().as_secs_f64()
-                    - audio_taken.load(Ordering::Relaxed) as f64 / AUDIO_BYTES_PER_SEC;
+                let lag =
+                    started.elapsed().as_secs_f64() - audio_taken.load(Ordering::Relaxed) as f64 / AUDIO_BYTES_PER_SEC;
                 if lag > MAX_LAG_SECS {
                     let _ = child.kill();
                     let _ = child.wait();
@@ -371,8 +372,23 @@ fn encoder_args(cfg: &Config, encoder: Encoder) -> Vec<String> {
         // Slice threads instead of frame threads: ~half the RAM, lower latency,
         // and measured slightly less CPU than the default here.
         Encoder::X264 | Encoder::Auto => &["-c:v", "libx264", "-preset", &cfg.preset, "-tune", "zerolatency"],
-        Encoder::Nvenc => &["-c:v", "h264_nvenc", "-preset", "p4", "-tune", "hq", "-rc", "cbr", "-bf", "0", "-forced-idr", "1"],
-        Encoder::Amf => &["-c:v", "h264_amf", "-usage", "lowlatency", "-quality", "quality", "-rc", "cbr", "-bf", "0", "-forced_idr", "1"],
+        Encoder::Nvenc => {
+            &["-c:v", "h264_nvenc", "-preset", "p4", "-tune", "hq", "-rc", "cbr", "-bf", "0", "-forced-idr", "1"]
+        }
+        Encoder::Amf => &[
+            "-c:v",
+            "h264_amf",
+            "-usage",
+            "lowlatency",
+            "-quality",
+            "quality",
+            "-rc",
+            "cbr",
+            "-bf",
+            "0",
+            "-forced_idr",
+            "1",
+        ],
     };
     args.iter().map(|a| a.to_string()).collect()
 }
@@ -391,8 +407,24 @@ fn ffmpeg_args(cfg: &Config, t0_rtc_us: i64, encoder: Encoder) -> Vec<String> {
         // Raw PCM needs no probing; without these ffmpeg reads ~5 s of audio
         // before it even starts capturing video.
         a.extend(
-            ["-thread_queue_size", "1024", "-probesize", "32", "-analyzeduration", "0",
-             "-itsoffset", AUDIO_SHIFT_SECS, "-f", "f32le", "-ar", "48000", "-ac", "2", "-i", "pipe:0"]
+            [
+                "-thread_queue_size",
+                "1024",
+                "-probesize",
+                "32",
+                "-analyzeduration",
+                "0",
+                "-itsoffset",
+                AUDIO_SHIFT_SECS,
+                "-f",
+                "f32le",
+                "-ar",
+                "48000",
+                "-ac",
+                "2",
+                "-i",
+                "pipe:0",
+            ]
             .map(String::from),
         );
     } else {
@@ -420,27 +452,48 @@ fn ffmpeg_args(cfg: &Config, t0_rtc_us: i64, encoder: Encoder) -> Vec<String> {
         "ddagrab=output_idx={}:framerate={}:draw_mouse={},\
          setpts='if(eq(N,0),st(0,(RTCTIME-{})/(TB*1000000)-PTS));PTS+ld(0)',\
          fps={},{},hwdownload,format=nv12[v]",
-        cfg.monitor, cfg.fps * CAPTURE_POLLS_PER_FRAME, cfg.draw_mouse as u8, t0_rtc_us, cfg.fps, scale
+        cfg.monitor,
+        cfg.fps * CAPTURE_POLLS_PER_FRAME,
+        cfg.draw_mouse as u8,
+        t0_rtc_us,
+        cfg.fps,
+        scale
     );
     let fps = cfg.fps.to_string();
     let rate = format!("{}k", cfg.video_bitrate_kbps);
     a.extend([
-        "-filter_complex".into(), graph,
-        "-map".into(), "[v]".into(),
-        "-fps_mode".into(), "cfr".into(),
-        "-r".into(), fps,
+        "-filter_complex".into(),
+        graph,
+        "-map".into(),
+        "[v]".into(),
+        "-fps_mode".into(),
+        "cfr".into(),
+        "-r".into(),
+        fps,
     ]);
     a.extend(encoder_args(cfg, encoder));
     a.extend([
-        "-b:v".into(), rate.clone(),
-        "-maxrate".into(), rate,
-        "-bufsize".into(), format!("{}k", cfg.video_bitrate_kbps * 2),
+        "-b:v".into(),
+        rate.clone(),
+        "-maxrate".into(),
+        rate,
+        "-bufsize".into(),
+        format!("{}k", cfg.video_bitrate_kbps * 2),
         // A keyframe every second: clips can start at any second boundary.
-        "-g".into(), (cfg.fps * 2).to_string(),
-        "-force_key_frames".into(), "expr:gte(t,n_forced*1)".into(),
+        "-g".into(),
+        (cfg.fps * 2).to_string(),
+        "-force_key_frames".into(),
+        "expr:gte(t,n_forced*1)".into(),
     ]);
     if has_audio(cfg) {
-        a.extend(["-map".into(), "0:a".into(), "-c:a".into(), "aac".into(), "-b:a".into(), format!("{}k", cfg.audio_bitrate_kbps)]);
+        a.extend([
+            "-map".into(),
+            "0:a".into(),
+            "-c:a".into(),
+            "aac".into(),
+            "-b:a".into(),
+            format!("{}k", cfg.audio_bitrate_kbps),
+        ]);
     }
     a.extend(["-f", "mpegts", "-muxdelay", "0", "-muxpreload", "0", "pipe:1"].map(String::from));
     a

@@ -15,8 +15,8 @@ use std::time::{Duration, Instant};
 
 use windows::core::PWSTR;
 use windows::Win32::Media::Audio::{
-    eCapture, eConsole, eRender, EDataFlow, IAudioCaptureClient, IAudioClient, IMMDeviceEnumerator,
-    MMDeviceEnumerator, AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR, AUDCLNT_SHAREMODE_SHARED,
+    eCapture, eConsole, eRender, EDataFlow, IAudioCaptureClient, IAudioClient, IMMDeviceEnumerator, MMDeviceEnumerator,
+    AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR, AUDCLNT_SHAREMODE_SHARED,
     AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM, AUDCLNT_STREAMFLAGS_LOOPBACK, AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
     WAVEFORMATEX,
 };
@@ -246,13 +246,16 @@ impl Source {
                 let mut qpc = 0u64;
                 self.capture.GetBuffer(&mut data, &mut frames, &mut flags, None, Some(&mut qpc))?;
                 let frames_n = frames as usize;
-                let at = (flags & AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR.0 as u32 == 0).then(|| mixer.frame_at(qpc as i64));
+                let at =
+                    (flags & AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR.0 as u32 == 0).then(|| mixer.frame_at(qpc as i64));
                 let (start, skip) = self.place(at, frames_n, mixer.frame_at(qpc_100ns()));
                 let silent = flags & AUDCLNT_BUFFERFLAGS_SILENT.0 as u32 != 0 || data.is_null();
                 if !silent && skip < frames_n && gain > 0.0 {
                     let bytes = std::slice::from_raw_parts(data, frames_n * CHANNELS * 4);
                     let samples: Vec<f32> = bytes[skip * CHANNELS * 4..]
-                        .chunks_exact(4)
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
                         .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
                         .collect();
                     peak = peak.max(mixer.add(start, &samples, gain));
@@ -276,7 +279,9 @@ impl Source {
 
 impl Drop for Source {
     fn drop(&mut self) {
-        unsafe { let _ = self.client.Stop(); }
+        unsafe {
+            let _ = self.client.Stop();
+        }
     }
 }
 
@@ -316,7 +321,10 @@ impl Slot {
             }
             match Source::open(self.kind) {
                 Ok(s) => {
-                    log!("audio: capturing the default {}", if self.kind == Kind::Mic { "microphone" } else { "output device" });
+                    log!(
+                        "audio: capturing the default {}",
+                        if self.kind == Kind::Mic { "microphone" } else { "output device" }
+                    );
                     self.last_err.clear();
                     self.source = Some(s);
                     self.checked_at = Instant::now();
@@ -382,7 +390,7 @@ mod tests {
     }
 
     fn samples(bytes: &[u8]) -> Vec<f32> {
-        bytes.chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect()
+        bytes.as_chunks::<4>().0.iter().map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect()
     }
 
     #[test]

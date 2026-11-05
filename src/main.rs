@@ -17,7 +17,9 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 
 use windows::core::{w, PCSTR, PCWSTR, PWSTR};
-use windows::Win32::Foundation::{CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, HWND, LPARAM, LRESULT, POINT, WPARAM};
+use windows::Win32::Foundation::{
+    CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, HWND, LPARAM, LRESULT, POINT, WPARAM,
+};
 use windows::Win32::System::Diagnostics::Debug::MessageBeep;
 use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress, LoadLibraryW};
 use windows::Win32::System::Threading::{
@@ -29,8 +31,8 @@ use windows::Win32::UI::Input::{
     RID_INPUT, RIM_TYPEKEYBOARD,
 };
 use windows::Win32::UI::Shell::{
-    FOLDERID_Videos, SHGetKnownFolderPath, ShellExecuteW, Shell_NotifyIconW, KNOWN_FOLDER_FLAG, NIF_ICON,
-    NIF_INFO, NIF_MESSAGE, NIF_TIP, NIIF_ERROR, NIIF_INFO, NIM_ADD, NIM_DELETE, NIM_MODIFY, NOTIFYICONDATAW,
+    FOLDERID_Videos, SHGetKnownFolderPath, ShellExecuteW, Shell_NotifyIconW, KNOWN_FOLDER_FLAG, NIF_ICON, NIF_INFO,
+    NIF_MESSAGE, NIF_TIP, NIIF_ERROR, NIIF_INFO, NIM_ADD, NIM_DELETE, NIM_MODIFY, NOTIFYICONDATAW,
 };
 use windows::Win32::UI::WindowsAndMessaging::*;
 
@@ -135,7 +137,11 @@ fn main() {
     }
     logging::init(&dir.join("flagra.log"));
     // Crisp popups on scaled displays (they size themselves per monitor).
-    unsafe { let _ = windows::Win32::UI::HiDpi::SetProcessDpiAwarenessContext(windows::Win32::UI::HiDpi::DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2); }
+    unsafe {
+        let _ = windows::Win32::UI::HiDpi::SetProcessDpiAwarenessContext(
+            windows::Win32::UI::HiDpi::DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+        );
+    }
 
     let cfg_path = dir.join("flagra.ini");
     let (cfg, warnings) = config::load(&cfg_path);
@@ -173,8 +179,18 @@ fn main() {
         };
         RegisterClassW(&wc);
         let Ok(h) = CreateWindowExW(
-            WINDOW_EX_STYLE(0), CLASS, w!("flagra"), WS_OVERLAPPED,
-            0, 0, 0, 0, None, None, Some(instance.into()), None,
+            WINDOW_EX_STYLE(0),
+            CLASS,
+            w!("flagra"),
+            WS_OVERLAPPED,
+            0,
+            0,
+            0,
+            0,
+            None,
+            None,
+            Some(instance.into()),
+            None,
         ) else {
             log!("cannot create window");
             return;
@@ -196,8 +212,8 @@ fn main() {
             DispatchMessageW(&msg);
         }
 
-        let mut nid = tray_data();
-        let _ = Shell_NotifyIconW(NIM_DELETE, &mut nid);
+        let nid = tray_data();
+        let _ = Shell_NotifyIconW(NIM_DELETE, &nid);
     }
     app().rec.shutdown();
     log!("flagra stopped");
@@ -294,7 +310,9 @@ unsafe fn dark_menus() {
     const FORCE_DARK: i32 = 2;
     let Ok(uxtheme) = LoadLibraryW(w!("uxtheme.dll")) else { return };
     let ordinal = |n: usize| PCSTR(n as *const u8);
-    if let (Some(set_mode), Some(flush)) = (GetProcAddress(uxtheme, ordinal(135)), GetProcAddress(uxtheme, ordinal(136))) {
+    if let (Some(set_mode), Some(flush)) =
+        (GetProcAddress(uxtheme, ordinal(135)), GetProcAddress(uxtheme, ordinal(136)))
+    {
         let set_mode: unsafe extern "system" fn(i32) -> i32 = std::mem::transmute(set_mode);
         let flush: unsafe extern "system" fn() = std::mem::transmute(flush);
         set_mode(FORCE_DARK);
@@ -350,7 +368,9 @@ fn save_clip() {
             Ok((path, secs)) => {
                 log!("saved {:.0}s clip: {}", secs, path.display());
                 if cfg.beep {
-                    unsafe { let _ = MessageBeep(MB_OK); }
+                    unsafe {
+                        let _ = MessageBeep(MB_OK);
+                    }
                 }
                 let name = path.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
                 Some(("Clip saved".to_string(), format!("last {:.0} s · {}", secs, name), false))
@@ -358,14 +378,18 @@ fn save_clip() {
             Err(e) => {
                 log!("clip failed: {}", e);
                 if cfg.beep {
-                    unsafe { let _ = MessageBeep(MB_ICONHAND); }
+                    unsafe {
+                        let _ = MessageBeep(MB_ICONHAND);
+                    }
                 }
                 Some(("Clip failed".to_string(), e, true))
             }
         };
         if let Some(n) = note {
             *a.note.lock().unwrap() = Some(n);
-            unsafe { let _ = PostMessageW(Some(hwnd()), WM_NOTE, WPARAM(0), LPARAM(0)); }
+            unsafe {
+                let _ = PostMessageW(Some(hwnd()), WM_NOTE, WPARAM(0), LPARAM(0));
+            }
         }
     });
 }
@@ -391,16 +415,16 @@ fn reload(quiet: bool) {
     }
     if old.start_with_windows != cfg.start_with_windows {
         autostart::sync(cfg.start_with_windows);
-    if cfg.keep_window_ready {
-        start_ui(true);
-    }
+        if cfg.keep_window_ready {
+            start_ui(true);
+        }
     }
     if old.hotkey != cfg.hotkey || old.open_hotkey != cfg.open_hotkey {
         register_hotkeys();
     }
     unsafe {
-        let mut nid = tray_data();
-        let _ = Shell_NotifyIconW(NIM_MODIFY, &mut nid);
+        let nid = tray_data();
+        let _ = Shell_NotifyIconW(NIM_MODIFY, &nid);
     }
     match warnings.first() {
         Some(w) => notify("flagra settings", &format!("{} (see flagra.log)", w), true),
@@ -413,7 +437,9 @@ fn reload(quiet: bool) {
 fn open_ui() {
     // The new process (or the open window it hands over to) has to come to
     // the front; Windows only lets that happen if we pass on our right to.
-    unsafe { let _ = AllowSetForegroundWindow(ASFW_ANY); }
+    unsafe {
+        let _ = AllowSetForegroundWindow(ASFW_ANY);
+    }
     start_ui(false);
 }
 
@@ -456,9 +482,7 @@ unsafe fn is_our_window(h: HWND) -> bool {
     let mut len = buf.len() as u32;
     let ok = QueryFullProcessImageNameW(process, PROCESS_NAME_WIN32, PWSTR(buf.as_mut_ptr()), &mut len).is_ok();
     let _ = CloseHandle(process);
-    ok && std::env::current_exe().is_ok_and(|me| {
-        PathBuf::from(String::from_utf16_lossy(&buf[..len as usize])).eq(&me)
-    })
+    ok && std::env::current_exe().is_ok_and(|me| PathBuf::from(String::from_utf16_lossy(&buf[..len as usize])).eq(&me))
 }
 
 fn register_hotkeys() {
@@ -487,9 +511,18 @@ fn register_hotkeys() {
     }
     if !taken.is_empty() {
         let names: Vec<&str> = taken.iter().map(|(_, combo)| combo.as_str()).collect();
-        notify("flagra", &format!("{} is also used by another program, so it may do both. You can pick another in settings.", names.join(" and ")), true);
+        notify(
+            "flagra",
+            &format!(
+                "{} is also used by another program, so it may do both. You can pick another in settings.",
+                names.join(" and ")
+            ),
+            true,
+        );
         // Often it's only for a moment, like another program starting up.
-        unsafe { SetTimer(Some(hwnd()), HOTKEY_RETRY_TIMER, HOTKEY_RETRY_MS, None); }
+        unsafe {
+            SetTimer(Some(hwnd()), HOTKEY_RETRY_TIMER, HOTKEY_RETRY_MS, None);
+        }
     }
     *app().taken.lock().unwrap() = taken;
 }
@@ -505,7 +538,9 @@ fn retry_hotkeys() {
         !free
     });
     if taken.is_empty() {
-        unsafe { let _ = KillTimer(Some(hwnd()), HOTKEY_RETRY_TIMER); }
+        unsafe {
+            let _ = KillTimer(Some(hwnd()), HOTKEY_RETRY_TIMER);
+        }
     }
 }
 
@@ -537,8 +572,8 @@ fn tray_icon() -> HICON {
 
 fn add_tray_icon() {
     unsafe {
-        let mut nid = tray_data();
-        let _ = Shell_NotifyIconW(NIM_ADD, &mut nid);
+        let nid = tray_data();
+        let _ = Shell_NotifyIconW(NIM_ADD, &nid);
     }
 }
 
@@ -548,7 +583,9 @@ fn notify(title: &str, text: &str, error: bool) {
     nid.dwInfoFlags = if error { NIIF_ERROR } else { NIIF_INFO };
     copy_wide(&mut nid.szInfoTitle, title);
     copy_wide(&mut nid.szInfo, text);
-    unsafe { let _ = Shell_NotifyIconW(NIM_MODIFY, &mut nid); }
+    unsafe {
+        let _ = Shell_NotifyIconW(NIM_MODIFY, &nid);
+    }
 }
 
 unsafe fn show_menu(h: HWND) {

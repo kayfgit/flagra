@@ -191,9 +191,8 @@ impl Default for Config {
     }
 }
 
-const PRESETS: &[&str] = &[
-    "ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow",
-];
+const PRESETS: &[&str] =
+    &["ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"];
 
 /// Written on first run. Keep the values in sync with `Config::default`.
 pub const TEMPLATE: &str = r#"# flagra settings.
@@ -303,8 +302,7 @@ pub fn set_value(text: &str, key: &str, value: &str) -> String {
     let mut done = false;
     for line in text.lines() {
         let code = line.split('#').next().unwrap_or("");
-        let matches = !done
-            && code.split_once('=').is_some_and(|(k, _)| k.trim().eq_ignore_ascii_case(key));
+        let matches = !done && code.split_once('=').is_some_and(|(k, _)| k.trim().eq_ignore_ascii_case(key));
         if matches {
             out.push_str(&format!("{} = {}", key, value));
             done = true;
@@ -480,7 +478,8 @@ mod tests {
 
     #[test]
     fn parses_values_and_rejects_bad_ones() {
-        let (c, warn) = parse("fps = 30\nresolution = 1281x720\npreset = turbo\naudio = off\noutput_dir = \"D:\\Clips\"");
+        let (c, warn) =
+            parse("fps = 30\nresolution = 1281x720\npreset = turbo\naudio = off\noutput_dir = \"D:\\Clips\"");
         assert_eq!(c.fps, 30);
         assert_eq!(c.resolution, Some((1280, 720)));
         assert_eq!(c.preset, "ultrafast");
