@@ -51,6 +51,26 @@ one-liner does (settings kept), and restarts flagra. Pushing a `v*` tag makes Gi
 installer and the portable zip and publish a release. The release notes are that version's section of
 [CHANGELOG.md](CHANGELOG.md) (new entries go under *Unreleased*); the release stops if it has none.
 
+### Checks
+
+CI runs these on every push to main and every pull request. Node is only needed for the window's
+checks, not to build flagra.
+
+```bash
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo test
+```
+
+```bash
+npm ci
+npm run check    # Prettier, ESLint, TypeScript (on the JS, via JSDoc) and the tests in tests/
+```
+
+`npm run format` and `cargo fmt` fix formatting. To work on the window in a browser without rebuilding,
+serve it (`python -m http.server -d ui`) and open it: it fills itself with made-up clips. The size and
+bitrate math is in `ui/sizing.js`, which the tests import.
+
 ### The bundled ffmpeg
 
 flagra runs ffmpeg as a separate program. Rather than depend on whatever ffmpeg a PC has (or a ~100 MB

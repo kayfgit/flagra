@@ -20,3 +20,6 @@ flagra.ini
 Thumbs.db
 desktop.ini
 .DS_Store
+
+# JS dev tooling
+node_modules/

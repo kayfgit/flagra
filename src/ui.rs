@@ -19,7 +19,6 @@ use tauri::{AppHandle, LogicalSize, Manager, PhysicalPosition, State, WebviewWin
 use webview2_com::Microsoft::Web::WebView2::Win32::{
     ICoreWebView2_19, COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW, COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL,
 };
-use windows_core62::Interface;
 use windows::core::{BOOL, PCWSTR};
 use windows::Win32::Foundation::{CloseHandle, GlobalFree, FILETIME, HANDLE, HWND, LPARAM, POINT, WPARAM};
 use windows::Win32::System::DataExchange::{CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData};
@@ -36,17 +35,44 @@ use windows::Win32::UI::Shell::{
 use windows::Win32::UI::WindowsAndMessaging::{
     FindWindowW, PostMessageW, SendMessageTimeoutW, SMTO_ABORTIFHUNG, SMTO_BLOCK, SW_SHOWNORMAL,
 };
+use windows_core62::Interface;
 
 use crate::config::{self, Config, Priority};
-use crate::{hotkey, recorder, util::wide, CLASS, WM_ENCODER, WM_LEVELS, WM_POPUP_TEST, WM_REMOTE_CLIP, WM_REMOTE_QUIT, WM_REMOTE_RELOAD, WM_STATUS};
+use crate::{
+    hotkey, recorder, util::wide, CLASS, WM_ENCODER, WM_LEVELS, WM_POPUP_TEST, WM_REMOTE_CLIP, WM_REMOTE_QUIT,
+    WM_REMOTE_RELOAD, WM_STATUS,
+};
 
 const CF_HDROP: u32 = 15;
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// Settings the GUI may change, in the order it shows them.
 const KEYS: &[&str] = &[
-    "hotkey", "open_hotkey", "clip_seconds", "fps", "resolution", "video_bitrate_kbps", "encoder", "preset", "audio", "desktop_volume", "mic", "mic_volume",
-    "audio_bitrate_kbps", "monitor", "draw_mouse", "priority", "gpu_priority", "output_dir", "ffmpeg_path", "beep", "popup", "popup_position", "notify", "start_with_windows", "keep_window_ready",
+    "hotkey",
+    "open_hotkey",
+    "clip_seconds",
+    "fps",
+    "resolution",
+    "video_bitrate_kbps",
+    "encoder",
+    "preset",
+    "audio",
+    "desktop_volume",
+    "mic",
+    "mic_volume",
+    "audio_bitrate_kbps",
+    "monitor",
+    "draw_mouse",
+    "priority",
+    "gpu_priority",
+    "output_dir",
+    "ffmpeg_path",
+    "beep",
+    "popup",
+    "popup_position",
+    "notify",
+    "start_with_windows",
+    "keep_window_ready",
 ];
 
 struct CpuSample {
@@ -74,12 +100,7 @@ pub fn run(dir: PathBuf, hidden: bool) {
                 focus(app);
             }
         }))
-        .manage(UiState {
-            dir,
-            cfg_path,
-            cpu: Mutex::new(None),
-            durations: Mutex::new(HashMap::new()),
-        })
+        .manage(UiState { dir, cfg_path, cpu: Mutex::new(None), durations: Mutex::new(HashMap::new()) })
         .setup(move |app| {
             let state = app.state::<UiState>();
             let cfg = config::load(&state.cfg_path).0;
@@ -109,9 +130,31 @@ pub fn run(dir: PathBuf, hidden: bool) {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            ready, close, quit, minimize, move_window, resize_window, save_placement, reset_placement, toggle_fullscreen,
-            load, status, levels, set_setting, set_settings, list_clips, save_clip, delete_clip, rename_clip, copy_clip, reveal, play,
-            open_special, start_recorder, stop_recorder, test_popup,
+            ready,
+            close,
+            quit,
+            minimize,
+            move_window,
+            resize_window,
+            save_placement,
+            reset_placement,
+            toggle_fullscreen,
+            load,
+            status,
+            levels,
+            set_setting,
+            set_settings,
+            list_clips,
+            save_clip,
+            delete_clip,
+            rename_clip,
+            copy_clip,
+            reveal,
+            play,
+            open_special,
+            start_recorder,
+            stop_recorder,
+            test_popup,
         ])
         .run(tauri::generate_context!())
         .expect("error while running the flagra window");
@@ -140,7 +183,11 @@ fn hide(window: &WebviewWindow) {
 /// While hidden, WebView2 is asked to give back as much memory as it can.
 fn set_low_memory(window: &WebviewWindow, low: bool) {
     let _ = window.with_webview(move |webview| unsafe {
-        let level = if low { COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW } else { COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL };
+        let level = if low {
+            COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW
+        } else {
+            COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL
+        };
         if let Ok(core) = webview.controller().CoreWebView2() {
             if let Ok(core) = core.cast::<ICoreWebView2_19>() {
                 let _ = core.SetMemoryUsageTargetLevel(level);
@@ -225,7 +272,8 @@ fn resize_window(window: WebviewWindow, dw: f64, dh: f64) {
     let scale = window.scale_factor().unwrap_or(1.0);
     if let Ok(size) = window.inner_size() {
         let size = size.to_logical::<f64>(scale);
-        let _ = window.set_size(LogicalSize::new((size.width + dw).max(MIN_SIZE[0]), (size.height + dh).max(MIN_SIZE[1])));
+        let _ =
+            window.set_size(LogicalSize::new((size.width + dw).max(MIN_SIZE[0]), (size.height + dh).max(MIN_SIZE[1])));
     }
 }
 
@@ -361,14 +409,23 @@ fn status(state: State<UiState>) -> Status {
         return Status { running: true, error: Some("the recorder isn't responding".into()), ..Default::default() };
     }
     let pid = (res & 0xffff_ffff) as u32;
-    let mut st = Status { running: true, recording: pid != 0, buffered: (res >> 32) as f64 / 1000.0, ..Default::default() };
+    let mut st =
+        Status { running: true, recording: pid != 0, buffered: (res >> 32) as f64 / 1000.0, ..Default::default() };
     if pid == 0 {
         st.error = last_capture_error(&state.dir);
         return st;
     }
     let mut encoder = 0usize;
     unsafe {
-        SendMessageTimeoutW(h, WM_ENCODER, WPARAM(0), LPARAM(0), SMTO_ABORTIFHUNG | SMTO_BLOCK, 500, Some(&mut encoder));
+        SendMessageTimeoutW(
+            h,
+            WM_ENCODER,
+            WPARAM(0),
+            LPARAM(0),
+            SMTO_ABORTIFHUNG | SMTO_BLOCK,
+            500,
+            Some(&mut encoder),
+        );
     }
     st.encoder = ["x264", "nvenc", "amf"].get(encoder.wrapping_sub(1)).copied();
     if let Some((cpu_100ns, mem)) = unsafe { process_stats(pid) } {
@@ -393,7 +450,9 @@ fn status(state: State<UiState>) -> Status {
 fn levels() -> Option<[f32; 2]> {
     let h = recorder_window()?;
     let mut res = 0usize;
-    let ok = unsafe { SendMessageTimeoutW(h, WM_LEVELS, WPARAM(0), LPARAM(0), SMTO_ABORTIFHUNG | SMTO_BLOCK, 200, Some(&mut res)) };
+    let ok = unsafe {
+        SendMessageTimeoutW(h, WM_LEVELS, WPARAM(0), LPARAM(0), SMTO_ABORTIFHUNG | SMTO_BLOCK, 200, Some(&mut res))
+    };
     (ok.0 != 0).then(|| [((res >> 16) & 0xffff) as f32 / 16384.0, (res & 0xffff) as f32 / 16384.0])
 }
 
@@ -402,7 +461,8 @@ unsafe fn process_stats(pid: u32) -> Option<(u64, Option<f64>)> {
     let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ, false, pid).ok()?;
     let (mut created, mut exited, mut kernel, mut user) = Default::default();
     let times = GetProcessTimes(h, &mut created, &mut exited, &mut kernel, &mut user).is_ok();
-    let mut pmc = PROCESS_MEMORY_COUNTERS { cb: std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32, ..Default::default() };
+    let mut pmc =
+        PROCESS_MEMORY_COUNTERS { cb: std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32, ..Default::default() };
     let mem = GetProcessMemoryInfo(h, &mut pmc, pmc.cb).is_ok().then(|| pmc.WorkingSetSize as f64 / 1_048_576.0);
     let _ = CloseHandle(h);
     let ticks = |t: FILETIME| (t.dwHighDateTime as u64) << 32 | t.dwLowDateTime as u64;
@@ -421,7 +481,9 @@ fn last_capture_error(dir: &Path) -> Option<String> {
     tail.lines()
         .rev()
         .filter_map(|l| l.split_once("] ").map(|(_, m)| m))
-        .find(|m| m.starts_with("capture:") && !m.starts_with("capture: starting") && !m.starts_with("capture: restarting"))
+        .find(|m| {
+            m.starts_with("capture:") && !m.starts_with("capture: starting") && !m.starts_with("capture: restarting")
+        })
         .map(|m| m.trim_start_matches("capture: ").to_string())
 }
 
@@ -454,7 +516,9 @@ fn set_settings(state: State<UiState>, settings: Vec<(String, String)>) -> Resul
     let (cfg, _) = config::parse(&new_text);
     fs::write(&state.cfg_path, new_text).map_err(|e| format!("cannot save settings: {}", e))?;
     if let Some(h) = recorder_window() {
-        unsafe { let _ = PostMessageW(Some(h), WM_REMOTE_RELOAD, WPARAM(1), LPARAM(0)); }
+        unsafe {
+            let _ = PostMessageW(Some(h), WM_REMOTE_RELOAD, WPARAM(1), LPARAM(0));
+        }
     }
     Ok(json!({ "config": config_json(&cfg), "restarted": old.capture_differs(&cfg) }))
 }
@@ -476,7 +540,9 @@ fn set_setting(app: AppHandle, state: State<UiState>, key: String, value: String
     }
     let changed = match key.as_str() {
         "hotkey" => Some(&cfg.hotkey).filter(|k| !k.eq_ignore_ascii_case(&old.hotkey)),
-        "open_hotkey" => cfg.open_hotkey.as_ref().filter(|k| old.open_hotkey.as_ref().is_none_or(|o| !k.eq_ignore_ascii_case(o))),
+        "open_hotkey" => {
+            cfg.open_hotkey.as_ref().filter(|k| old.open_hotkey.as_ref().is_none_or(|o| !k.eq_ignore_ascii_case(o)))
+        }
         _ => None,
     };
     if let Some(combo) = changed {
@@ -486,7 +552,9 @@ fn set_setting(app: AppHandle, state: State<UiState>, key: String, value: String
     }
     fs::write(&state.cfg_path, new_text).map_err(|e| format!("cannot save settings: {}", e))?;
     if let Some(h) = recorder_window() {
-        unsafe { let _ = PostMessageW(Some(h), WM_REMOTE_RELOAD, WPARAM(1), LPARAM(0)); }
+        unsafe {
+            let _ = PostMessageW(Some(h), WM_REMOTE_RELOAD, WPARAM(1), LPARAM(0));
+        }
     }
     if key == "output_dir" {
         allow_clips_dir(&app, &cfg);
@@ -545,7 +613,7 @@ fn list_clips(state: State<UiState>) -> Vec<Clip> {
             })
         })
         .collect();
-    clips.sort_by(|a, b| b.modified.cmp(&a.modified));
+    clips.sort_by_key(|c| std::cmp::Reverse(c.modified));
     clips
 }
 
@@ -728,7 +796,14 @@ fn open_special(state: State<UiState>, what: String) -> Result<(), String> {
 fn shell_open(path: &Path) {
     let p = wide(&path.to_string_lossy());
     unsafe {
-        ShellExecuteW(None, windows::core::w!("open"), PCWSTR(p.as_ptr()), PCWSTR::null(), PCWSTR::null(), SW_SHOWNORMAL);
+        ShellExecuteW(
+            None,
+            windows::core::w!("open"),
+            PCWSTR(p.as_ptr()),
+            PCWSTR::null(),
+            PCWSTR::null(),
+            SW_SHOWNORMAL,
+        );
     }
 }
 
@@ -755,6 +830,8 @@ fn test_popup() -> Result<(), String> {
 #[tauri::command]
 fn stop_recorder() {
     if let Some(h) = recorder_window() {
-        unsafe { let _ = PostMessageW(Some(h), WM_REMOTE_QUIT, WPARAM(0), LPARAM(0)); }
+        unsafe {
+            let _ = PostMessageW(Some(h), WM_REMOTE_QUIT, WPARAM(0), LPARAM(0));
+        }
     }
 }
