@@ -23,6 +23,36 @@ impl Priority {
     }
 }
 
+/// How far ffmpeg's GPU work may cut ahead of a game's. Capture is a sliver of
+/// GPU work, but at normal priority it can wait behind whole game frames and
+/// fall behind; at realtime it interrupts the game every frame it grabs, which
+/// some games show as stutter.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum GpuPriority {
+    Normal,
+    High,
+    Realtime,
+}
+
+impl GpuPriority {
+    pub fn parse(s: &str) -> Option<GpuPriority> {
+        Some(match s.to_ascii_lowercase().as_str() {
+            "normal" => GpuPriority::Normal,
+            "high" => GpuPriority::High,
+            "realtime" => GpuPriority::Realtime,
+            _ => return None,
+        })
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            GpuPriority::Normal => "normal",
+            GpuPriority::High => "high",
+            GpuPriority::Realtime => "realtime",
+        }
+    }
+}
+
 /// Where the clip-saved popup appears, on the screen the game is on.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Corner {
@@ -107,6 +137,7 @@ pub struct Config {
     pub monitor: u32,
     pub draw_mouse: bool,
     pub priority: Priority,
+    pub gpu_priority: GpuPriority,
     /// None = <Videos>\flagra.
     pub output_dir: Option<PathBuf>,
     /// None = the ffmpeg bundled with flagra (or one next to flagra.exe, or on PATH).
@@ -145,6 +176,7 @@ impl Default for Config {
             monitor: 0,
             draw_mouse: true,
             priority: Priority::BelowNormal,
+            gpu_priority: GpuPriority::High,
             output_dir: None,
             ffmpeg_path: None,
             beep: true,
@@ -214,6 +246,11 @@ draw_mouse = true
 # below_normal lets games win when the CPU is busy (the clip may stutter instead of your game).
 priority = below_normal
 
+# GPU priority of the capture: normal, high or realtime.
+# realtime keeps clips smooth when a game maxes out the GPU, but makes some games stutter.
+# normal never gets in a game's way, but clips may freeze while the GPU is maxed out.
+gpu_priority = high
+
 # Where clips go. Empty = your Videos folder\flagra.
 output_dir =
 
@@ -254,6 +291,7 @@ impl Config {
             || self.monitor != other.monitor
             || self.draw_mouse != other.draw_mouse
             || self.priority != other.priority
+            || self.gpu_priority != other.gpu_priority
             || self.ffmpeg_path != other.ffmpeg_path
     }
 }
@@ -383,6 +421,10 @@ pub fn parse(text: &str) -> (Config, Vec<String>) {
                     }
                 }
             }
+            "gpu_priority" => match GpuPriority::parse(val) {
+                Some(p) => c.gpu_priority = p,
+                None => bad("expected normal, high or realtime"),
+            },
             "output_dir" => c.output_dir = path_value(val),
             "ffmpeg_path" => c.ffmpeg_path = path_value(val),
             _ => warn.push(format!("line {}: unknown setting {:?}", i + 1, key)),

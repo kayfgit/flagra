@@ -17,7 +17,7 @@ use windows::Win32::System::JobObjects::{
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
 };
 
-use crate::config::{Config, Encoder};
+use crate::config::{Config, Encoder, GpuPriority};
 use crate::ts::Ring;
 use crate::util::{file_stamp, qpc_100ns, rtc_us};
 use crate::{audio, log};
@@ -25,8 +25,8 @@ use crate::{audio, log};
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 /// Extra seconds kept beyond clip_seconds, so a clip can always start on a keyframe.
 const SLACK_SECS: u64 = 3;
-/// How often ddagrab looks for a new desktop frame (see ffmpeg_args).
-const CAPTURE_POLL_HZ: u32 = 500;
+/// ddagrab looks for a new desktop frame this many times per recorded frame (see ffmpeg_args).
+const CAPTURE_POLLS_PER_FRAME: u32 = 2;
 /// While recording, audio is stamped this much later than it really is, and
 /// save_clip undoes it. ffmpeg pauses any input running >100 ms ahead of the
 /// slowest one; audio is inherently ~100 ms behind (WASAPI + AAC framing), so
@@ -326,7 +326,8 @@ fn run_session(s: &Shared, cfg: &Config, encoder: Encoder) -> Result<End, String
             // Only possible once ffmpeg has opened the GPU, a moment after it starts.
             if !gpu_priority_set {
                 let process = HANDLE(child.as_raw_handle());
-                gpu_priority_set = unsafe { raise_gpu_priority(process, started.elapsed() > Duration::from_secs(10)) };
+                gpu_priority_set =
+                    unsafe { raise_gpu_priority(process, cfg.gpu_priority, started.elapsed() > Duration::from_secs(10)) };
             }
             if encoder != Encoder::X264
                 && started.elapsed() > GPU_ENCODER_TIMEOUT
@@ -407,15 +408,19 @@ fn ffmpeg_args(cfg: &Config, t0_rtc_us: i64, encoder: Encoder) -> Vec<String> {
     // by that amount, putting video on the same timeline as the audio.
     // ddagrab paced at the target fps only waits half a frame for new desktop
     // content, so on high-refresh monitors it often times out and repeats the
-    // previous frame (~9% measured at 60 fps on 120 Hz). Polling at 500 Hz and
-    // letting fps= pick the freshest frame per slot gave 0 repeats for +0.4% CPU.
+    // previous frame (~9% measured at 60 fps on 120 Hz). Polling faster and
+    // letting fps= pick the freshest frame per slot fixes that. But every new
+    // desktop frame it finds is a full-screen GPU copy plus a cursor draw, and
+    // a moving cursor alone counts as one: polling at 500 Hz made ~120+ of them
+    // a second in League of Legends to keep 30, each one interrupting the game,
+    // which stuttered. Twice the frame rate keeps fps= fed with few of them.
     // Capture, frame selection, scaling and RGB->NV12 all stay on the GPU; only
     // the final NV12 frame is copied back for x264.
     let graph = format!(
         "ddagrab=output_idx={}:framerate={}:draw_mouse={},\
          setpts='if(eq(N,0),st(0,(RTCTIME-{})/(TB*1000000)-PTS));PTS+ld(0)',\
          fps={},{},hwdownload,format=nv12[v]",
-        cfg.monitor, CAPTURE_POLL_HZ, cfg.draw_mouse as u8, t0_rtc_us, cfg.fps, scale
+        cfg.monitor, cfg.fps * CAPTURE_POLLS_PER_FRAME, cfg.draw_mouse as u8, t0_rtc_us, cfg.fps, scale
     );
     let fps = cfg.fps.to_string();
     let rate = format!("{}k", cfg.video_bitrate_kbps);
@@ -484,12 +489,19 @@ fn unshim(exe: PathBuf) -> PathBuf {
 /// Lets ffmpeg's GPU work (grabbing, scaling, reading frames back) cut ahead of
 /// a game's. It is a sliver of work, but at normal priority it waits behind
 /// whole game frames: measured at 0.4x real time with a game holding a GT 1030
-/// at 90%, and back to real time at REALTIME. No admin rights needed, but it
-/// fails until the process has opened the GPU. Returns true once done, or once
-/// `give_up` and it still fails (logged).
-unsafe fn raise_gpu_priority(process: HANDLE, give_up: bool) -> bool {
+/// at 90%, and back to real time at REALTIME. REALTIME preempts the game in
+/// the middle of its frames though, which made League of Legends stutter, so
+/// high is the default. No admin rights needed, but it fails until the
+/// process has opened the GPU. Returns true once done, or once `give_up` and
+/// it still fails (logged).
+unsafe fn raise_gpu_priority(process: HANDLE, wanted: GpuPriority, give_up: bool) -> bool {
+    let tries: &[(&str, i32)] = match wanted {
+        GpuPriority::Normal => return true,
+        GpuPriority::High => &[("high", GPU_PRIORITY_HIGH)],
+        GpuPriority::Realtime => &[("realtime", GPU_PRIORITY_REALTIME), ("high", GPU_PRIORITY_HIGH)],
+    };
     let mut status = 0;
-    for (name, prio) in [("realtime", GPU_PRIORITY_REALTIME), ("high", GPU_PRIORITY_HIGH)] {
+    for &(name, prio) in tries {
         status = D3DKMTSetProcessSchedulingPriorityClass(process, prio);
         if status == 0 {
             log!("capture: GPU priority {}", name);
